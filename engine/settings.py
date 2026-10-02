@@ -2,8 +2,9 @@ import math
 
 W, H = 320, 200          # internal render resolution
 SCALE = 3                # window scale factor
-FOV = math.pi / 3
+FOV = math.radians(100)
 TEX = 64                 # texture size
+WALL_H = 2               # wall height in world units (eye is at 0.5)
 MOUSE_SENS = 0.0025
 MOVE_SPEED = 3.0
 FPS = 60

@@ -1,6 +1,6 @@
 import math
 import pygame as pg
-from .settings import W, VIEW_H, FOV, TEX
+from .settings import W, VIEW_H, FOV, TEX, WALL_H
 from .world import cast_ray
 
 
@@ -12,7 +12,13 @@ class Renderer:
         for tid, tex in wall_textures.items():
             dark = tex.copy()
             dark.fill((160, 160, 160), special_flags=pg.BLEND_RGB_MULT)
-            self.cols[tid] = [[s.subsurface((x, 0, 1, TEX)) for x in range(TEX)] for s in (tex, dark)]
+            cols = []
+            for t in (tex, dark):  # stack the texture WALL_H times so tall walls tile instead of stretch
+                tall = pg.Surface((TEX, TEX * WALL_H))
+                for i in range(WALL_H):
+                    tall.blit(t, (0, i * TEX))
+                cols.append([tall.subsurface((x, 0, 1, TEX * WALL_H)) for x in range(TEX)])
+            self.cols[tid] = cols
         # Tall background with the horizon in the middle, shifted by pitch when drawn.
         self.bg = pg.Surface((W, VIEW_H * 3))
         for y in range(VIEW_H * 3 // 2):
@@ -32,18 +38,10 @@ class Renderer:
             if not tid:
                 continue
             col = self.cols.get(tid, self.cols[1])[side][min(TEX - 1, int(wx * TEX))]
-            h = max(1, int(self.proj / dist))
-            top = self.horizon - int(h * (0.5 - player.z))  # eye height 0.5 + jump
-            vis_top, vis_bot = max(0, top), min(VIEW_H, top + h)
-            if vis_bot <= vis_top:
-                continue
-            if h <= VIEW_H:
-                screen.blit(pg.transform.scale(col, (1, h)), (x, top))
-            else:  # crop the texture to the visible part before scaling
-                t0 = int((vis_top - top) * TEX / h)
-                t1 = min(TEX, max(t0 + 1, math.ceil((vis_bot - top) * TEX / h)))
-                sub = col.subsurface((0, t0, 1, t1 - t0))
-                screen.blit(pg.transform.scale(sub, (1, vis_bot - vis_top)), (x, vis_top))
+            unit = self.proj / dist  # pixels per world unit at this distance
+            h = max(1, int(unit * WALL_H))
+            top = self.horizon - int(unit * (WALL_H - 0.5 - player.z))  # eye height 0.5 + jump
+            self.blit_column(screen, col, x, top, h)
         self.draw_sprites(screen, world.enemies + world.items + world.projectiles + world.effects, player)
 
     def draw_sprites(self, screen, sprites, player):
@@ -56,14 +54,32 @@ class Renderer:
             if depth > 0.2 and abs(rel) < FOV:
                 visible.append((depth, rel, s))
         for depth, rel, s in sorted(visible, key=lambda v: -v[0]):
-            size = min(int(self.proj / depth * s.scale), VIEW_H * 3)
+            size = self.proj / depth * s.scale
             if size < 1:
                 continue
-            img = pg.transform.scale(s.image, (size, size))
-            cx = W / 2 + math.tan(rel) * self.proj
-            left = int(cx - size / 2)
+            img = s.image
+            iw = img.get_width()
+            left = W / 2 + math.tan(rel) * self.proj - size / 2
             z = getattr(s, "z", 0.0)  # height of the sprite's bottom above the floor
             top = int(self.horizon + self.proj / depth * (0.5 + player.z - z) - size)
-            for x in range(max(0, left), min(W, left + size)):
+            for x in range(max(0, math.ceil(left)), min(W, math.ceil(left + size))):
                 if depth < self.zbuf[x]:
-                    screen.blit(img, (x, top), (x - left, 0, 1, size))
+                    sx = max(0, min(iw - 1, int((x - left) / size * iw)))
+                    self.blit_column(screen, img.subsurface((sx, 0, 1, img.get_height())), x, top, int(size))
+
+    @staticmethod
+    def blit_column(screen, col, x, top, h):
+        """Scale a 1px-wide column to height h at (x, top), cropping to the view first
+        so huge close-up walls/sprites stay cheap and undistorted."""
+        if h < 1:
+            return
+        vis_top, vis_bot = max(0, top), min(VIEW_H, top + h)
+        if vis_bot <= vis_top:
+            return
+        ch = col.get_height()
+        if vis_top == top and vis_bot == top + h:
+            screen.blit(pg.transform.scale(col, (1, h)), (x, top))
+            return
+        t0 = int((vis_top - top) * ch / h)
+        t1 = min(ch, max(t0 + 1, math.ceil((vis_bot - top) * ch / h)))
+        screen.blit(pg.transform.scale(col.subsurface((0, t0, 1, t1 - t0)), (1, vis_bot - vis_top)), (x, vis_top))

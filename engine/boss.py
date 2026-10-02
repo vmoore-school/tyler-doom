@@ -209,7 +209,7 @@ VARIANTS = [Falsity, Cruelty, Lovity]
 # --- the boss ------------------------------------------------------------------
 
 class Verity(Enemy):
-    scale, radius = 1.6, 0.6
+    scale, radius = 1.45, 0.6  # with his float, stays under WALL_H
     head_frac = 0.5
     base_health = 1200
     attack_names = ["eiffel", "baguettes", "eras", "encyclopedia", "quiz", "variants", "backrooms"]
@@ -237,7 +237,7 @@ class Verity(Enemy):
 
     @property
     def z(self):
-        return 0.3 + 0.15 * math.sin(self.anim * 2) if self.alive else 0.0
+        return 0.25 + 0.1 * math.sin(self.anim * 2) if self.alive else 0.0
 
     @property
     def image(self):
@@ -331,8 +331,8 @@ class Verity(Enemy):
             x, y = p.x + random.uniform(-2.5, 2.5), p.y + random.uniform(-2.5, 2.5)
             if not game.world.tile(int(x), int(y)):
                 game.world.projectiles.append(Missile(
-                    x, y, random.uniform(3, 6), 0, 0, 0, "baguette", int(14 * self.power),
-                    scale=0.6, gravity=9.0, splash=0.8))
+                    x, y, random.uniform(1.6, 1.9), 0, 0, 0, "baguette", int(14 * self.power),
+                    scale=0.6, gravity=4.0, splash=0.8))  # drop from just under the wall tops
 
     def attack_eras(self, game):
         """Taylor Swift's age: a ring of exactly that many music notes."""
