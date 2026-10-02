@@ -33,7 +33,7 @@ class Renderer:
                 continue
             col = self.cols.get(tid, self.cols[1])[side][min(TEX - 1, int(wx * TEX))]
             h = max(1, int(self.proj / dist))
-            top = self.horizon - h // 2
+            top = self.horizon - int(h * (0.5 - player.z))  # eye height 0.5 + jump
             vis_top, vis_bot = max(0, top), min(VIEW_H, top + h)
             if vis_bot <= vis_top:
                 continue
@@ -63,7 +63,7 @@ class Renderer:
             cx = W / 2 + math.tan(rel) * self.proj
             left = int(cx - size / 2)
             z = getattr(s, "z", 0.0)  # height of the sprite's bottom above the floor
-            top = int(self.horizon + self.proj / depth * (0.5 - z) - size)
+            top = int(self.horizon + self.proj / depth * (0.5 + player.z - z) - size)
             for x in range(max(0, left), min(W, left + size)):
                 if depth < self.zbuf[x]:
                     screen.blit(img, (x, top), (x - left, 0, 1, size))

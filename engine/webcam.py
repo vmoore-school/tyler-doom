@@ -1,5 +1,6 @@
 """Doom-style status bar portrait fed by the webcam (pygame.camera).
 Falls back to a placeholder if no camera is available."""
+import math
 import threading
 import pygame as pg
 import pygame.camera
@@ -8,7 +9,7 @@ import pygame.camera
 class WebcamPortrait:
     def __init__(self, size=(30, 30), cam_res=(160, 120)):
         self.size = size
-        self.frame = None
+        self.frame = self.big_frame = None
         self.cam = None
         self.running = False
         try:
@@ -34,6 +35,7 @@ class WebcamPortrait:
             side = min(w, h)  # centre square crop, mirrored like a selfie
             crop = img.subsurface(((w - side) // 2, (h - side) // 2, side, side))
             self.frame = pg.transform.flip(pg.transform.smoothscale(crop, self.size), True, False)
+            self.big_frame = pg.transform.flip(pg.transform.smoothscale(crop, (120, 120)), True, False)
 
     def stop(self):
         self.running = False
@@ -42,6 +44,19 @@ class WebcamPortrait:
                 self.cam.stop()
             except Exception:
                 pass
+
+    def snapshot(self):
+        """Larger still of the player's face (or a stand-in head) for the death cutscene."""
+        if self.big_frame is not None:
+            return self.big_frame.copy()
+        s = pg.Surface((120, 120))
+        s.fill((40, 30, 30))
+        pg.draw.circle(s, (200, 150, 120), (60, 64), 46)
+        for x in (44, 76):
+            pg.draw.circle(s, (255, 255, 255), (x, 58), 8)
+            pg.draw.circle(s, (0, 0, 0), (x, 58), 4)
+        pg.draw.arc(s, (120, 40, 40), (40, 70, 40, 22), math.pi, 2 * math.pi, 3)
+        return s
 
     def render(self, health, hurt_flash, dead):
         """Portrait with Doom-ish damage effects: bloodier as health drops."""

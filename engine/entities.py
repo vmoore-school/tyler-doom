@@ -9,6 +9,7 @@ class Player:
     def __init__(self, x, y, angle=0.0):
         self.x, self.y, self.angle = x, y, angle
         self.pitch = 0.0  # vertical look: horizon offset in screen pixels (+ = looking up)
+        self.z = self.vz = 0.0  # jump height above the floor
         self.health = 100
         self.hurt_flash = 0.0
         self.invulnerable = False
@@ -80,6 +81,12 @@ class Enemy:
         else:
             self.state, self.timer = "pain", 0.2
 
+    def perform_attack(self, game, sees, dist):
+        """Resolve an attack once the wind-up finishes. Override for special attacks."""
+        if sees and dist < self.attack_range and random.random() < self.accuracy:
+            game.player.hurt(self.damage)
+            game.play("hurt")
+
     def update(self, dt, game):
         if not self.alive:
             self.dead_time += dt
@@ -100,9 +107,8 @@ class Enemy:
                 self.state = "chase"
         elif self.state == "attack":
             if self.timer <= 0:
-                if sees and p.alive and dist < self.attack_range and random.random() < self.accuracy:
-                    p.hurt(self.damage)
-                    game.play("hurt")
+                if p.alive:
+                    self.perform_attack(game, sees, dist)
                 self.state, self.cooldown = "chase", self.attack_cooldown
         elif self.state == "chase":
             if sees and p.alive and dist < self.attack_range and self.cooldown <= 0:

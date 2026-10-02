@@ -12,6 +12,7 @@ from engine.grapple import Grapple
 from engine.webcam import WebcamPortrait
 from engine.projectiles import Grenade
 from engine.pickups import Powerups, TreeOfLife
+from engine import boss
 
 
 class Game:
@@ -35,11 +36,13 @@ class Game:
             "beam": assets.noise_sound(0.09, 0.15, 0.5, 4),
             "explosion": assets.noise_sound(0.7, 1.0, 1.5, 5),
             "powerup": assets.noise_sound(0.25, 0.25, 0.3, 6),
+            "chomp": assets.noise_sound(0.12, 0.6, 4, 7),
         }
         Grenade.frames()
         self.grenade_icon = pg.transform.smoothscale(Grenade.frames()[0], (14, 14))
-        for cls in SPAWN_POOL:  # build sprites up front to avoid mid-game hitches
+        for cls in SPAWN_POOL + [boss.Verity] + boss.VARIANTS:  # build sprites up front to avoid mid-game hitches
             cls.get_frames()
+        self.deaths = 0
         pg.event.set_grab(True)
         pg.mouse.set_visible(False)
         self.reset()
@@ -58,8 +61,58 @@ class Game:
         self.throw_t = 0.0  # throw animation / cooldown timer
         self.wave = 1
         self.countdown = None
-        self.world.spawn_wave(self.wave_size(), self.player)
+        self.speech, self.speech_t = "", 0.0
+        self.quiz = None
+        self.backrooms_t = self.invert_t = 0.0
+        self.death_t, self.dead_face, self.next_chomp = None, None, 0.0
+        self.start_wave()
+
+    BOSS_EVERY = 7
+
+    def start_wave(self):
+        """Normal waves grow by one enemy each time; every BOSS_EVERY waves, Verity shows up."""
+        if self.wave % self.BOSS_EVERY == 0:
+            level = self.wave // self.BOSS_EVERY  # stronger every encounter
+            x, y = max(self.world.free_tiles(self.player, 8.0),
+                       key=lambda t: math.hypot(t[0] - self.player.x, t[1] - self.player.y))
+            self.world.enemies.append(boss.Verity(x, y, level))
+            self.say(f"IT'S ME. IT'S VERITY. (Level {level})", 3.0)
+        else:
+            self.world.spawn_wave(self.wave_size(), self.player)
         self.world.spawn_tree(self.player)
+
+    def skip_to_boss(self):
+        """Debug/cheat: jump straight to the next Verity wave."""
+        v = self.boss()
+        if v and v.alive:
+            return
+        self.wave = (self.wave // self.BOSS_EVERY + 1) * self.BOSS_EVERY
+        self.countdown, self.quiz = None, None
+        self.world.enemies.clear()
+        self.world.projectiles.clear()
+        self.start_wave()
+
+    def boss(self):
+        return next((e for e in self.world.enemies if isinstance(e, boss.Verity)), None)
+
+    def say(self, text, dur=2.5):
+        self.speech, self.speech_t = text, dur
+
+    def start_quiz(self, verity):
+        q, answers, correct = boss.make_question(self)
+        self.quiz = {"q": q, "answers": answers, "correct": correct, "t": 6.0,
+                     "dmg": int(25 * verity.power), "verity": verity}
+
+    def answer_quiz(self, i):
+        q, self.quiz = self.quiz, None
+        if i == q["correct"]:
+            q["verity"].stun = 3.0
+            self.say("Correct?! Impossible... (Verity is stunned: double damage!)", 2.5)
+        else:
+            self.player.hurt(q["dmg"])
+            self.play("hurt")
+            right = q["answers"][q["correct"]]
+            self.say(f"WRONG. It's {right}. I know everything.", 2.5)
 
     MINIMAP_CELL = 2
 
@@ -116,9 +169,10 @@ class Game:
             if not (0 < along < wall and abs(dy * c - dx * s) < e.radius):
                 continue
             # Height (world units, floor = 0, eye = 0.5) the crosshair points at at this distance.
-            z = 0.5 + p.pitch * along / self.renderer.proj
-            if 0 <= z <= e.scale:
-                hits.append((along, e, z >= e.scale * (1 - e.head_frac)))
+            z = 0.5 + p.z + p.pitch * along / self.renderer.proj
+            z0 = getattr(e, "z", 0.0)  # floating enemies
+            if z0 <= z <= z0 + e.scale:
+                hits.append((along, e, z >= z0 + e.scale * (1 - e.head_frac)))
         hits.sort(key=lambda h: h[0])
         for _, e, head in (hits if pierce else hits[:1]):
             if head:
@@ -146,6 +200,12 @@ class Game:
             if ev.type == pg.KEYDOWN:
                 if ev.key == pg.K_r and not self.player.alive:
                     self.reset()
+                elif ev.key == pg.K_p and self.player.alive:
+                    self.skip_to_boss()
+                elif self.quiz and ev.key in (pg.K_z, pg.K_x, pg.K_c):
+                    self.answer_quiz((pg.K_z, pg.K_x, pg.K_c).index(ev.key))
+                elif ev.key == pg.K_SPACE and self.player.alive and self.player.z == 0:
+                    self.player.vz = 4.2  # jump
                 elif pg.K_1 <= ev.key < pg.K_1 + len(self.weapons):
                     self.weapon = self.weapons[ev.key - pg.K_1]
             if (ev.type == pg.MOUSEBUTTONDOWN and ev.button == 3) or (ev.type == pg.KEYDOWN and ev.key == pg.K_e):
@@ -156,8 +216,9 @@ class Game:
             if (ev.type == pg.MOUSEBUTTONDOWN and ev.button == 2) or (ev.type == pg.KEYDOWN and ev.key == pg.K_g):
                 self.throw_grenade()
             if ev.type == pg.MOUSEMOTION:
-                self.player.angle += ev.rel[0] * MOUSE_SENS
-                self.player.pitch = max(-MAX_PITCH, min(MAX_PITCH, self.player.pitch - ev.rel[1] * PITCH_SENS))
+                inv = -1 if self.invert_t > 0 else 1  # Falsity lies to your mouse
+                self.player.angle += ev.rel[0] * MOUSE_SENS * inv
+                self.player.pitch = max(-MAX_PITCH, min(MAX_PITCH, self.player.pitch - ev.rel[1] * PITCH_SENS * inv))
         p = self.player
         if not p.alive:
             return
@@ -175,7 +236,7 @@ class Game:
             step = MOVE_SPEED * self.powerups.speed_mult * dt / n
             self.world.move(p, mx * step, my * step)
             self.walk_t += dt
-        if pg.mouse.get_pressed()[0] or keys[pg.K_SPACE]:
+        if pg.mouse.get_pressed()[0]:
             self.weapon.fire(self)
 
     def update(self, dt):
@@ -184,6 +245,21 @@ class Game:
         self.player.hurt_flash = max(0.0, self.player.hurt_flash - dt)
         self.headshot_flash = max(0.0, self.headshot_flash - dt)
         self.throw_t = max(0.0, self.throw_t - dt)
+        self.speech_t = max(0.0, self.speech_t - dt)
+        self.backrooms_t = max(0.0, self.backrooms_t - dt)
+        self.invert_t = max(0.0, self.invert_t - dt)
+        p = self.player
+        p.vz -= 12.0 * dt  # jump physics
+        p.z = max(0.0, p.z + p.vz * dt)
+        if p.z == 0:
+            p.vz = 0.0
+        if self.quiz:
+            self.quiz["t"] -= dt
+            if self.quiz["t"] <= 0 or not self.quiz["verity"].alive:
+                if self.quiz["verity"].alive:
+                    self.answer_quiz(-1)
+                else:
+                    self.quiz = None
         w = self.world
         self.powerups.update(dt, self)
         for obj in w.projectiles + w.effects + w.items:
@@ -196,7 +272,21 @@ class Game:
             e.update(dt, self)
         self.world.enemies = [e for e in self.world.enemies if e.alive or e.dead_time < 2.0]
         if not self.player.alive:
+            if self.death_t is None:
+                self.death_t, self.dead_face = 0.0, self.portrait.snapshot()
+                self.deaths += 1
+                self.quiz = None
+                self.invert_t = self.backrooms_t = 0.0
+            self.death_t += dt
+            if 1.6 < self.death_t < 3.2 and self.death_t >= self.next_chomp:
+                self.play("chomp")
+                self.next_chomp = self.death_t + 0.22
             return
+        v = self.boss()
+        if v and not v.alive:  # Verity's minions vanish with him
+            for e in self.world.enemies:
+                if isinstance(e, boss.VerityVariant) and e.alive:
+                    e.state = "dead"
         if self.countdown is None:
             if not any(e.alive for e in self.world.enemies):
                 self.countdown = 5.0
@@ -210,8 +300,8 @@ class Game:
                 self.countdown = None
                 self.wave += 1
                 self.world.enemies.clear()
-                self.world.spawn_wave(self.wave_size(), self.player)
-                self.world.spawn_tree(self.player)
+                self.world.projectiles.clear()
+                self.start_wave()
 
     def draw_hud(self):
         scr, p = self.screen, self.player
@@ -240,13 +330,54 @@ class Game:
         self.draw_minimap()
         self.draw_status_bar()
         msgs = []
-        if not p.alive:
-            msgs = [f"YOU DIED ON WAVE {self.wave}", "press R"]
-        elif self.countdown is not None:
+        if p.alive:
+            self.draw_boss_ui()
+        else:
+            boss.draw_brain_eating(scr, self.death_t or 0.0, self.dead_face, self.big)
+            if (self.death_t or 0) > 3.2:
+                img = self.font.render(f"DIED ON WAVE {self.wave}  -  press R", True, (255, 60, 60))
+                scr.blit(img, img.get_rect(center=(cx, VIEW_H - 10)))
+        if p.alive and self.countdown is not None:
             msgs = [f"WAVE {self.wave} CLEARED", f"next wave in {math.ceil(self.countdown)}"]
         for i, msg in enumerate(msgs):
             img = self.big.render(msg, True, (255, 40, 40))
             scr.blit(img, img.get_rect(center=(cx, cy - 40 + i * 24)))
+
+    def draw_boss_ui(self):
+        scr = self.screen
+        if self.backrooms_t > 0:  # the Backrooms: buzzing yellow haze
+            ov = pg.Surface((W, VIEW_H), pg.SRCALPHA)
+            ov.fill((210, 190, 70, 70 + int(30 * math.sin(self.backrooms_t * 40))))
+            scr.blit(ov, (0, 0))
+        if self.invert_t > 0:
+            img = self.font.render("CONTROLS INVERTED", True, (90, 140, 255))
+            scr.blit(img, img.get_rect(center=(W // 2, VIEW_H - 30)))
+        v = self.boss()
+        if v and v.alive:
+            bw = 160
+            x = W // 2 - bw // 2
+            pg.draw.rect(scr, (40, 0, 0), (x, 4, bw, 7))
+            pg.draw.rect(scr, (255, 210, 0), (x, 4, int(bw * max(0, v.hp) / v.max_hp), 7))
+            pg.draw.rect(scr, (0, 0, 0), (x, 4, bw, 7), 1)
+            img = self.font.render(f"VERITY  Lv {v.level}" + ("  STUNNED" if v.stun > 0 else ""), True, (255, 220, 0))
+            scr.blit(img, img.get_rect(center=(W // 2, 18)))
+        if self.speech_t > 0 and self.speech:
+            img = self.font.render(self.speech, True, (255, 240, 120))
+            box = img.get_rect(center=(W // 2, 32)).inflate(8, 4)
+            bg = pg.Surface(box.size, pg.SRCALPHA)
+            bg.fill((0, 0, 0, 170))
+            scr.blit(bg, box)
+            scr.blit(img, img.get_rect(center=box.center))
+        if self.quiz:
+            q = self.quiz
+            box = pg.Rect(30, 44, W - 60, 62)
+            bg = pg.Surface(box.size, pg.SRCALPHA)
+            bg.fill((20, 20, 60, 220))
+            scr.blit(bg, box)
+            pg.draw.rect(scr, (255, 210, 0), box, 1)
+            scr.blit(self.font.render(f"{q['q']}  ({math.ceil(q['t'])})", True, (255, 255, 255)), (box.x + 6, box.y + 5))
+            for i, a in enumerate(q["answers"]):
+                scr.blit(self.font.render(f"[{'ZXC'[i]}] {a}", True, (255, 220, 0)), (box.x + 10, box.y + 20 + i * 13))
 
     def draw_status_bar(self):
         """Classic Doom layout: ammo | health | face | wave | enemies left."""
