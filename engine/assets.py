@@ -1,5 +1,6 @@
 """Procedurally generated textures, sprites and sounds."""
 import array
+import os
 import random
 import pygame as pg
 from .settings import TEX
@@ -68,7 +69,29 @@ WALLS = {1: brick, 2: stone, 3: metal}
 
 # --- enemy sprites -------------------------------------------------------
 
-def demon(skin, eye, leg=0, arms="down", horns=True):
+PHOTO_DIR = os.path.join(os.path.dirname(__file__), "..", "assets")
+
+
+def load_face(filename, crop, rotate=0, size=(26, 30)):
+    """Load a photo, crop (fractions x, y, w, h), and cut out an oval face."""
+    img = pg.transform.rotate(pg.image.load(os.path.join(PHOTO_DIR, filename)), rotate)
+    w, h = img.get_size()
+    rect = pg.Rect(int(crop[0] * w), int(crop[1] * h), int(crop[2] * w), int(crop[3] * h))
+    face = pg.transform.smoothscale(img.subsurface(rect), size)
+    out = _surf(*size)
+    mask = pg.Surface(size)
+    mask.fill((0, 0, 0))
+    pg.draw.ellipse(mask, (255, 255, 255), (0, 0, *size))
+    for y in range(size[1]):
+        for x in range(size[0]):
+            if mask.get_at((x, y))[0]:
+                c = face.get_at((x, y))
+                transparent = len(c) > 3 and c[3] < 128
+                out.set_at((x, y), KEY if transparent or c[:3] == KEY else c[:3])
+    return out
+
+
+def demon(skin, eye, leg=0, arms="down", horns=True, face=None):
     s = _surf(64, 64)
     dark = tuple(c * 6 // 10 for c in skin)
     pg.draw.rect(s, dark, (22 + leg, 44, 7, 19))
@@ -83,6 +106,9 @@ def demon(skin, eye, leg=0, arms="down", horns=True):
         pg.draw.line(s, skin, (43, 27), (52, 8), 5)
         pg.draw.circle(s, (255, 140, 20), (32, 5), 5)
         pg.draw.circle(s, (255, 240, 120), (32, 5), 2)
+    if face:
+        s.blit(face, (32 - face.get_width() // 2, 0))
+        return s
     pg.draw.circle(s, skin, (32, 16), 9)
     if horns:
         pg.draw.polygon(s, (230, 220, 190), [(24, 12), (19, 2), (28, 9)])
@@ -91,6 +117,17 @@ def demon(skin, eye, leg=0, arms="down", horns=True):
     pg.draw.rect(s, eye, (34, 13, 3, 3))
     pg.draw.line(s, (40, 0, 0), (28, 21), (36, 21), 2)
     return s
+
+
+def _rekey(tinted, original):
+    """Restore colorkey transparency lost when tinting a keyed surface."""
+    out = _surf(*original.get_size())
+    out.blit(tinted, (0, 0))
+    for y in range(original.get_height()):
+        for x in range(original.get_width()):
+            if original.get_at((x, y))[:3] == KEY:
+                out.set_at((x, y), KEY)
+    return out
 
 
 def corpse(skin):
@@ -102,12 +139,18 @@ def corpse(skin):
     return s
 
 
-def enemy_frames(skin, eye, horns=True):
+def enemy_frames(skin, eye, horns=True, face=None):
     pain = tuple(min(255, c + 100) for c in skin)
+    pain_face = None
+    if face:
+        pain_face = face.copy()
+        pain_face.fill((120, 0, 0), special_flags=pg.BLEND_RGB_ADD)
+        pain_face.set_colorkey(None)
+        pain_face = _rekey(pain_face, face)
     return {
-        "walk": [demon(skin, eye, 0, horns=horns), demon(skin, eye, 3, horns=horns)],
-        "attack": demon(skin, eye, arms="up", horns=horns),
-        "pain": demon(pain, (255, 255, 255), horns=horns),
+        "walk": [demon(skin, eye, 0, horns=horns, face=face), demon(skin, eye, 3, horns=horns, face=face)],
+        "attack": demon(skin, eye, arms="up", horns=horns, face=face),
+        "pain": demon(pain, (255, 255, 255), horns=horns, face=pain_face),
         "dead": corpse(skin),
     }
 
@@ -143,6 +186,22 @@ def shotgun(firing=False):
     pg.draw.rect(s, (110, 65, 30), (22, 26, 20, 10))
     pg.draw.ellipse(s, (205, 150, 115), (14, 30, 16, 16))
     pg.draw.ellipse(s, (205, 150, 115), (36, 34, 18, 16))
+    return s
+
+
+TYLER = ("Tyler photo 1.jpg", (0.25, 0.22, 0.5, 0.48))
+
+
+def tyler_beam(firing=False):
+    s = _surf(64, 48)
+    if firing:
+        pg.draw.circle(s, (255, 60, 200), (32, 14), 14)
+        pg.draw.circle(s, (255, 200, 255), (32, 14), 9)
+    pg.draw.polygon(s, (70, 30, 90), [(18, 48), (24, 14), (40, 14), (46, 48)])
+    pg.draw.polygon(s, (150, 80, 180), [(18, 48), (24, 14), (40, 14), (46, 48)], 2)
+    s.blit(load_face(*TYLER, size=(16, 18)), (24, 20))
+    pg.draw.ellipse(s, (205, 150, 115), (8, 34, 16, 14))
+    pg.draw.ellipse(s, (205, 150, 115), (40, 34, 16, 14))
     return s
 
 
