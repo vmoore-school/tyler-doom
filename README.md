@@ -49,6 +49,40 @@ From the main or pause menu:
 
 Settings are saved to `settings.json` next to `main.py`.
 
+## Leaderboard
+
+A global leaderboard ranks runs by the highest wave reached, then kills. When you die after a valid run, the
+death screen asks for a name (Enter submits, Esc skips). Rounds where the Tyler Death Beam was enabled (T) aren't
+submitted. View it from **Leaderboard** in the main or pause menu.
+
+Scores are stored in a free [Supabase](https://supabase.com) project. To set one up:
+
+1. Create a project, open the **SQL Editor** and run:
+
+   ```sql
+   create table public.scores (
+     id         bigint generated always as identity primary key,
+     name       text not null check (char_length(btrim(name)) between 1 and 12),
+     wave       int  not null check (wave between 1 and 500),
+     kills      int  not null check (kills >= 0 and kills <= wave * (wave + 5) / 2 + 100),
+     created_at timestamptz not null default now()
+   );
+   create index scores_rank on public.scores (wave desc, kills desc, created_at);
+   alter table public.scores enable row level security;
+   create policy "anyone can read" on public.scores for select to anon using (true);
+   create policy "anyone can add"  on public.scores for insert to anon with check (true);
+   -- no update/delete policies: only you (in the dashboard) can edit or remove scores
+   ```
+
+2. From **Project Settings -> API**, copy the Project URL and the **anon / publishable** key into
+   `engine/leaderboard_config.py`.
+
+The anon key is public by design: it ships inside the web page, and the Row Level Security rules above limit it
+to reading scores and adding sane-looking ones. **Never** put the `service_role` / secret key in the game or the repo.
+Since the game is open source, someone determined could still post a fake score by hand; delete junk rows from
+the Supabase dashboard (Table Editor). Free projects pause after about a week without activity; resume from
+the dashboard.
+
 ## Gameplay
 
 - Each wave has one more enemy than the last. Clearing it refills health, ammo and grenades.
@@ -67,7 +101,9 @@ Settings are saved to `settings.json` next to `main.py`.
 | File | Contents |
 |---|---|
 | `main.py` | Game loop, input, HUD, waves |
-| `engine/menus.py` | Main menu, pause menu, help screens |
+| `engine/menus.py` | Main, pause, settings, leaderboard and help screens |
+| `engine/leaderboard.py` | Leaderboard client (Supabase REST; uses the page's `fetch` in the browser) |
+| `engine/leaderboard_config.py` | Supabase project URL + anon key |
 | `engine/render.py` | Raycaster for walls and sprites |
 | `engine/world.py` | Map (`LEVEL`), collision, pathfinding, spawning |
 | `engine/entities.py` | Player, `Enemy` base class, roles (`ROLES`), faces (`FACES`), `SPAWN_POOL` |

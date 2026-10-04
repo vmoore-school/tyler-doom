@@ -27,17 +27,19 @@ CONTROLS = [
 HOW_TO_PLAY = [
     "Survive waves of your friends. Each wave has one more enemy than the last. "
     "Clearing a wave refills your health, ammo and grenades.",
-    "Every enemy shows its attack before it lands, so watch and dodge:",
+    "Every enemy shows its attack before it lands. Dodge it:",
     "  Brawler (sword): raises the sword, then swings. Back off. It's a bit slower than you.",
     "  Archer (bow): glints, then shoots where you are. Strafe or jump the arrow.",
     "  Mage (staff): slow homing orbs (sidestep late) and runes under your feet "
     "(the screen glows purple: move!).",
-    "Shooting an enemy makes it flinch and cancels its attack. Headshots do 2.5x damage.",
-    "The radar (top right) points to every enemy. Bigger, brighter dots are closer.",
+    "Shooting an enemy makes it flinch and cancels its attack. Headshots do 2.5x damage. "
+    "The radar (top right) points to every enemy; bigger dots are closer.",
     "Grapple: hold to throw your hand at a wall or the floor and get pulled to it. "
     "Grab high on a wall to climb.",
-    "Al Gore's Tree of Life drops golden apples with random power-ups.",
+    "Al Gore's Tree of Life drops golden apples with random power-ups. "
     "Every 7th wave, Verity arrives, stronger each time.",
+    "When you die, enter your name to post your wave and kills to the global leaderboard "
+    "(rounds with the Tyler Death Beam don't count).",
 ]
 
 
@@ -60,7 +62,8 @@ class Menus:
 
     def __init__(self, game):
         self.game = game
-        self.current = None  # "main", "pause", "help", "settings" or None while playing
+        self.current = None  # "main", "pause", "help", "settings", "leaderboard" or None while playing
+        self.board = None    # leaderboard Request being shown
         self.back_to = None  # where help / settings return to
         self.sel = 0
         self.page = 0
@@ -82,11 +85,14 @@ class Menus:
     @property
     def title_screen(self):
         """True on the main menu (and screens opened from it): no game running behind it."""
-        return self.current == "main" or (self.current in ("help", "settings") and self.back_to == "main")
+        return self.current == "main" or (self.current in ("help", "settings", "leaderboard")
+                                          and self.back_to == "main")
 
     def open(self, name):
-        if name in ("help", "settings"):
+        if name in ("help", "settings", "leaderboard"):
             self.back_to, self.page = self.current, 0
+        if name == "leaderboard":
+            self.board = self.game.leaderboard.fetch_top()
         self.current, self.sel = name, 0
         self.game.unlock_mouse()
 
@@ -97,9 +103,10 @@ class Menus:
     def items(self):
         quit_ = [] if WEB else [("QUIT", "quit")]  # a web page can't quit
         if self.current == "main":
-            return [("PLAY", "play"), ("HELP", "help"), ("SETTINGS", "settings")] + quit_
+            return [("PLAY", "play"), ("LEADERBOARD", "leaderboard"), ("HELP", "help"), ("SETTINGS", "settings")] + quit_
         if self.current == "pause":
-            return [("RESUME", "resume"), ("HELP", "help"), ("SETTINGS", "settings"), ("MAIN MENU", "main")] + quit_
+            return [("RESUME", "resume"), ("LEADERBOARD", "leaderboard"), ("HELP", "help"), ("SETTINGS", "settings"),
+                    ("MAIN MENU", "main")] + quit_
         if self.current == "settings":
             g, st = self.game, self.game.settings
             items = []
@@ -125,6 +132,11 @@ class Menus:
                 self.act("resume")
             elif self.current == "settings" and back:
                 self.act("back")
+            elif self.current == "leaderboard":
+                if ev.key == pg.K_r:
+                    self.board = self.game.leaderboard.fetch_top()
+                elif back or ev.key in (pg.K_RETURN, pg.K_SPACE):
+                    self.act("back")
             elif ev.key in (pg.K_w, pg.K_UP):
                 self.sel = (self.sel - 1) % len(items)
             elif ev.key in (pg.K_s, pg.K_DOWN):
@@ -157,7 +169,7 @@ class Menus:
             self.close()
         elif action == "resume":
             self.close()
-        elif action in ("help", "settings"):
+        elif action in ("help", "settings", "leaderboard"):
             self.open(action)
         elif action == "back":
             self.current, self.sel = self.back_to, 0
@@ -178,11 +190,14 @@ class Menus:
 
     def draw(self, win):
         shade = pg.Surface(win.get_size(), pg.SRCALPHA)
-        shade.fill((0, 0, 0, 225 if self.current == "help" else 150))
+        shade.fill((0, 0, 0, 225 if self.current in ("help", "leaderboard") else 150))
         win.blit(shade, (0, 0))
         self.buttons = []
         if self.current == "help":
             self.draw_help(win)
+            return
+        if self.current == "leaderboard":
+            self.draw_leaderboard(win)
             return
         cx = self.LW // 2
         heading = {"main": "DOOM-ISH", "pause": "PAUSED", "settings": "SETTINGS"}[self.current]
@@ -191,7 +206,7 @@ class Menus:
         self.text(win, self.title_font, heading, RED, (cx, 130), shadow=True)
         self.text(win, self.text_font, sub, GREY, (cx, 190))
         font = self.item_font if self.current != "settings" else self.option_font
-        gap = 50
+        gap = 50 if len(self.items()) <= 5 else 42
         for i, (label, action) in enumerate(self.items()):
             selected = i == self.sel
             rect = self.text(win, font, f"> {label} <" if selected else label,
@@ -205,6 +220,37 @@ class Menus:
             self.text(win, self.small_font, hint + ",  Tab to resume", GREY, (cx, 482))
         else:
             self.text(win, self.small_font, hint, GREY, (cx, self.LH - 30))
+
+    def draw_leaderboard(self, win):
+        w, h, m = self.LW, self.LH, self.m
+        self.text(win, self.item_font, "LEADERBOARD", RED, (w // 2, 45), shadow=True)
+        self.text(win, self.small_font, "Highest wave reached, then most kills", GREY, (w // 2, 85))
+        req = self.board
+        if not self.game.leaderboard.enabled:
+            msg = "The leaderboard isn't set up (see engine/leaderboard_config.py)"
+        elif req.status == "pending":
+            msg = "Loading..."
+        elif req.status == "error":
+            msg = f"Couldn't load the leaderboard: {req.error}"
+        elif not req.result:
+            msg = "No scores yet. Be the first!"
+        else:
+            msg = None
+        if msg:
+            self.text(win, self.text_font, msg, WHITE, (w // 2, 250))
+        else:
+            cols = ((250, "#", "midright"), (290, "NAME", "midleft"), (600, "WAVE", "midright"), (720, "KILLS", "midright"))
+            for x, label, anchor in cols:
+                self.text(win, self.small_font, label, GREY, (x, 130), anchor=anchor)
+            for i, row in enumerate(req.result):
+                y = 165 + i * 34
+                color = YELLOW if i == 0 else WHITE
+                values = (f"{i + 1}.", str(row.get("name", "?")), str(row.get("wave", 0)), str(row.get("kills", 0)))
+                for (x, _, anchor), value in zip(cols, values):
+                    self.text(win, self.option_font, value, color, (x, y), anchor=anchor)
+        rect = self.text(win, self.text_font, "> BACK <", YELLOW, (w // 2, h - 42))
+        self.buttons.append((rect.inflate(round(60 * m), round(16 * m)), "back"))
+        self.text(win, self.small_font, "R to refresh, Esc to go back", GREY, (w // 2, h - 16))
 
     def draw_help(self, win):
         w, h, m = self.LW, self.LH, self.m
@@ -229,7 +275,7 @@ class Menus:
                 for line in wrap(para, self.text_font, (w - 2 * left) * m):
                     self.text(win, self.text_font, line, WHITE, (left, y), anchor="topleft")
                     y += 23
-                y += 7
+                y += 5
         rect = self.text(win, self.text_font, "> BACK <", YELLOW, (w // 2, h - 42))
         self.buttons.append((rect.inflate(round(60 * m), round(16 * m)), "back"))
         self.text(win, self.small_font, "A/D to switch tabs, Esc to go back", GREY, (w // 2, h - 16))

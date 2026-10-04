@@ -17,10 +17,12 @@ from engine.projectiles import Grenade, Rune
 from engine.pickups import Powerups
 from engine import boss
 from engine.menus import Menus
+from engine.leaderboard import Leaderboard, NAME_MAX, clean_name
 
 WEB = sys.platform == "emscripten"  # running in the browser via pygbag
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
-DEFAULT_SETTINGS = {"fullscreen": False, "resolution": "retro"}
+SETTINGS_KEY = "doomish-settings"  # browser localStorage key (the web build's files don't survive a reload)
+DEFAULT_SETTINGS = {"fullscreen": False, "resolution": "retro", "name": ""}
 
 
 class Game:
@@ -54,6 +56,7 @@ class Game:
         for cls in SPAWN_POOL + [boss.Verity] + boss.VARIANTS:  # build sprites up front to avoid mid-game hitches
             cls.get_frames()
         self.deaths = 0
+        self.leaderboard = Leaderboard()
         self.reset()
         self.menu.open("main")
 
@@ -63,9 +66,15 @@ class Game:
     def load_settings():
         settings = dict(DEFAULT_SETTINGS)
         try:
-            with open(SETTINGS_FILE) as f:
-                settings.update({k: v for k, v in json.load(f).items() if k in DEFAULT_SETTINGS})
-        except (OSError, ValueError):
+            if WEB:
+                import platform  # pygbag's bridge to the page's JavaScript
+                saved = platform.window.localStorage.getItem(SETTINGS_KEY)
+                saved = json.loads(saved) if saved else {}
+            else:
+                with open(SETTINGS_FILE) as f:
+                    saved = json.load(f)
+            settings.update({k: v for k, v in saved.items() if k in DEFAULT_SETTINGS})
+        except Exception:  # missing / corrupt / storage blocked: use the defaults
             pass
         if settings["resolution"] not in RESOLUTIONS:
             settings["resolution"] = "retro"
@@ -73,10 +82,14 @@ class Game:
 
     def save_settings(self):
         try:
-            with open(SETTINGS_FILE, "w") as f:
-                json.dump(self.settings, f, indent=2)
-        except OSError:
-            pass  # e.g. read-only install; the setting still applies for this session
+            if WEB:
+                import platform
+                platform.window.localStorage.setItem(SETTINGS_KEY, json.dumps(self.settings))
+            else:
+                with open(SETTINGS_FILE, "w") as f:
+                    json.dump(self.settings, f, indent=2)
+        except Exception as e:  # the setting still applies for this session
+            print("couldn't save settings:", e)
 
     def change_setting(self, key, value):
         self.settings[key] = value
@@ -153,7 +166,11 @@ class Game:
         self.backrooms_t = self.invert_t = 0.0
         self.death_t, self.dead_face, self.next_chomp = None, None, 0.0
         self.beam_enabled = False      # the Tyler Death Beam is opt-in per round (press T)
-        self.leaderboard_valid = True  # turned off by enabling the beam; for the future leaderboard
+        self.leaderboard_valid = True  # turned off by enabling the beam
+        self.kills = 0
+        self.name_entry = None   # text being typed on the death screen, or None
+        self.score_handled = False  # name prompt shown (submitted or skipped) for this run
+        self.submit_req = None   # leaderboard Request for this run's score
         self.notice, self.notice_t = None, 0.0
         self.start_wave()
 
@@ -281,6 +298,36 @@ class Game:
         self.world.projectiles.append(
             Grenade(p.x + c * 0.3, p.y + s * 0.3, 0.45, c * speed, s * speed, 2.5 + up * speed))
 
+    # --- leaderboard: name prompt after a valid run ---
+
+    def death_scene_done(self):
+        return (self.death_t or 0.0) > (3.2 if self.killed_by_verity() else 1.5)
+
+    def start_name_entry(self):
+        self.score_handled = True
+        self.name_entry = self.settings.get("name", "")
+        pg.key.start_text_input()
+
+    def handle_name_entry(self, ev):
+        if ev.type == pg.TEXTINPUT:
+            self.name_entry = (self.name_entry + ev.text)[:NAME_MAX]
+        elif ev.type == pg.KEYDOWN:
+            if ev.key == pg.K_BACKSPACE:
+                self.name_entry = self.name_entry[:-1]
+            elif ev.key in (pg.K_RETURN, pg.K_KP_ENTER):
+                name = clean_name(self.name_entry)
+                if name:
+                    self.settings["name"] = name
+                    self.save_settings()
+                    self.submit_req = self.leaderboard.submit(name, self.wave, self.kills)
+                    self.end_name_entry()
+            elif ev.key == pg.K_ESCAPE:
+                self.end_name_entry()
+
+    def end_name_entry(self):
+        self.name_entry = None
+        pg.key.stop_text_input()
+
     def handle_input(self, dt):
         for ev in pg.event.get():
             if ev.type == pg.QUIT:
@@ -290,6 +337,9 @@ class Game:
                 continue
             if WEB and ev.type == pg.MOUSEBUTTONDOWN:  # browsers only lock the mouse after a click (Esc unlocks)
                 self.lock_mouse()
+            if self.name_entry is not None:
+                self.handle_name_entry(ev)
+                continue
             if ev.type == pg.KEYDOWN:
                 if ev.key in (pg.K_TAB, pg.K_ESCAPE):
                     self.pause()
@@ -367,6 +417,10 @@ class Game:
         self.world.update_flow(self.player)
         for e in self.world.enemies:
             e.update(dt, self)
+        for e in self.world.enemies:
+            if not e.alive and not getattr(e, "counted", False):
+                e.counted = True
+                self.kills += 1
         self.world.enemies = [e for e in self.world.enemies if e.alive or e.dead_time < 2.0]
         if not self.player.alive:
             if self.death_t is None:
@@ -378,12 +432,16 @@ class Game:
             if self.killed_by_verity() and 1.6 < self.death_t < 3.2 and self.death_t >= self.next_chomp:
                 self.play("chomp")
                 self.next_chomp = self.death_t + 0.22
+            if (self.death_scene_done() and not self.score_handled and self.leaderboard.enabled
+                    and self.leaderboard_valid):
+                self.start_name_entry()
             return
         v = self.boss()
         if v and not v.alive:  # Verity's minions vanish with him
             for e in self.world.enemies:
                 if isinstance(e, boss.VerityVariant) and e.alive:
                     e.state = "dead"
+                    e.counted = True  # vanished, not killed
         if self.countdown is None:
             if not any(e.alive for e in self.world.enemies):
                 self.countdown = 5.0
@@ -437,9 +495,8 @@ class Game:
                 boss.draw_brain_eating(scr, t, self.dead_face, self.big)
             else:
                 self.draw_death(t)
-            if t > (3.2 if self.killed_by_verity() else 1.5):
-                img = self.font.render(f"DIED ON WAVE {self.wave}  -  press R", True, (255, 60, 60))
-                scr.blit(img, img.get_rect(center=(cx, VIEW_H - 10)))
+            if self.death_scene_done():
+                self.draw_score_status()
         if p.alive and self.countdown is not None:
             msgs = [f"WAVE {self.wave} CLEARED", f"next wave in {math.ceil(self.countdown)}"]
         for i, msg in enumerate(msgs):
@@ -447,6 +504,38 @@ class Game:
             scr.blit(img, img.get_rect(center=(cx, cy - 40 + i * 24)))
         if self.notice_t > 0 and p.alive and not self.menu.active:
             self.draw_notice()
+
+    def draw_score_status(self):
+        """Death screen footer: name prompt / submission status, then the restart hint."""
+        scr, cx = self.screen, W // 2
+        if self.name_entry is not None:
+            box = pg.Rect(0, 0, 170, 31)
+            box.midbottom = (cx, VIEW_H - 2)
+            bg = pg.Surface(box.size, pg.SRCALPHA)
+            bg.fill((0, 0, 0, 200))
+            scr.blit(bg, box)
+            pg.draw.rect(scr, (255, 215, 0), box, 1)
+            lines = [(self.label_font, "NAME FOR THE LEADERBOARD", (255, 215, 0)),
+                     (self.font, self.name_entry + ("_" if pg.time.get_ticks() // 400 % 2 else " "), (255, 255, 255)),
+                     (self.label_font, "Enter: submit    Esc: skip", (200, 200, 200))]
+            y = box.y + 2
+            for font, text, color in lines:
+                img = font.render(text, True, color)
+                scr.blit(img, img.get_rect(midtop=(cx, y)))
+                y += img.get_height()
+            return
+        status = None
+        if not self.leaderboard_valid and self.leaderboard.enabled:
+            status = ("Tyler Death Beam used - score not submitted", (255, 120, 120))
+        elif self.submit_req:
+            status = {"pending": ("Submitting score...", (255, 215, 0)),
+                      "ok": ("Score submitted to the leaderboard!", (120, 255, 120)),
+                      "error": (f"Couldn't submit: {self.submit_req.error}", (255, 120, 120))}[self.submit_req.status]
+        if status:
+            img = self.font.render(*status[:1], True, status[1])
+            scr.blit(img, img.get_rect(center=(cx, VIEW_H - 24)))
+        img = self.font.render(f"DIED ON WAVE {self.wave}  -  {self.kills} KILLS  -  press R", True, (255, 60, 60))
+        scr.blit(img, img.get_rect(center=(cx, VIEW_H - 10)))
 
     def draw_notice(self):
         """Boxed message in the lower middle of the view (beam warning, locked weapon)."""
@@ -610,6 +699,7 @@ class Game:
         while True:
             dt = min(self.clock.tick(FPS) / 1000, 0.05)
             self.handle_input(dt)
+            self.leaderboard.poll()
             if self.menu.title_screen:  # slowly look around the level behind the title
                 self.player.angle += 0.15 * dt
             elif not self.menu.active:
