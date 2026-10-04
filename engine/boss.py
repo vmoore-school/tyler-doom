@@ -418,11 +418,9 @@ def make_question(game):
 
 # --- death cutscene: Verity eats your brain out of your webcam face ------------
 
-def draw_brain_eating(screen, t, face, big_font):
+def draw_brain_eating(screen, t, face, big_font, tint):
     cx, cy = W // 2, VIEW_H // 2
-    shade = pg.Surface((W, VIEW_H), pg.SRCALPHA)
-    shade.fill((20, 0, 0, min(230, int(t * 300))))
-    screen.blit(shade, (0, 0))
+    tint((20, 0, 0), min(230, t * 300))  # see Game.tint
     hs = 80
     hx, hy = cx - 85, cy - 25
     head = pg.transform.smoothscale(face, (hs, hs))

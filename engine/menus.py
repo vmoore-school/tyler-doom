@@ -67,6 +67,8 @@ class Menus:
         self.current = None  # "main", "pause", "help", "settings", "leaderboard" or None while playing
         self.board = None    # leaderboard Request being shown
         self._logo = None    # (scale, surface) cache of the main menu logo
+        self._shade = None   # darkens the game behind the menu
+        self._text = {}      # rendered text, by (font, text, colour)
         self.back_to = None  # where help / settings return to
         self.sel = 0
         self.page = 0
@@ -76,6 +78,7 @@ class Menus:
     def resize(self, size):
         """Fit the layout to the area the game picture occupies on screen."""
         self.m = size[0] / self.LW
+        self._text = {}  # rendered with the old fonts
         font = lambda px: pg.font.Font(None, max(8, round(px * self.m)))
         self.title_font, self.item_font = font(110), font(48)
         self.text_font, self.small_font = font(26), font(22)
@@ -191,10 +194,20 @@ class Menus:
 
     # --- drawing (positions are on the 960x600 logical canvas) ---
 
-    def draw(self, win):
-        shade = pg.Surface(win.get_size(), pg.SRCALPHA)
-        shade.fill((0, 0, 0, 225 if self.current in ("help", "leaderboard") else 150))
-        win.blit(shade, (0, 0))
+    def shade_alpha(self):
+        """How much the game behind is darkened."""
+        return 225 if self.current in ("help", "leaderboard") else 150
+
+    def draw_shade(self, win):
+        # A solid surface with whole-surface alpha: much faster to blend than per-pixel alpha.
+        if self._shade is None or self._shade.get_size() != win.get_size():
+            self._shade = pg.Surface(win.get_size()).convert()
+        self._shade.set_alpha(self.shade_alpha())
+        win.blit(self._shade, (0, 0))
+
+    def draw(self, win, shade=True):
+        if shade:
+            self.draw_shade(win)
         self.buttons = []
         if self.current == "help":
             self.draw_help(win)
@@ -236,7 +249,9 @@ class Menus:
             img = pg.image.load(os.path.join(PHOTO_DIR, "other/logo.png")).convert_alpha()
             img = img.subsurface(img.get_bounding_rect())
             k = 190 * self.m / img.get_height()  # 190 logical pixels tall
-            self._logo = (self.m, pg.transform.scale(img, (round(img.get_width() * k), round(img.get_height() * k))))
+            logo = pg.transform.scale(img, (round(img.get_width() * k), round(img.get_height() * k)))
+            logo.set_alpha(255, pg.RLEACCEL)  # skips the transparent parts when drawn
+            self._logo = (self.m, logo)
         return self._logo[1]
 
     def draw_leaderboard(self, win):
@@ -300,10 +315,21 @@ class Menus:
 
     def text(self, win, font, s, color, pos, anchor="center", shadow=False):
         """Draw text at a logical position; returns its rect in window pixels."""
-        img = font.render(s, True, color)
+        img = self.render(font, s, color)
         rect = img.get_rect(**{anchor: (round(pos[0] * self.m), round(pos[1] * self.m))})
         if shadow:
             off = max(1, round(4 * self.m))
-            win.blit(font.render(s, True, (0, 0, 0)), rect.move(off, off))
+            win.blit(self.render(font, s, (0, 0, 0)), rect.move(off, off))
         win.blit(img, rect)
         return rect
+
+    def render(self, font, s, color):
+        """font.render, remembered (menus redraw the same text every frame), RLE for fast blits."""
+        key = (font, s, color)
+        img = self._text.get(key)
+        if img is None:
+            if len(self._text) > 500:
+                self._text.clear()
+            img = self._text[key] = font.render(s, True, color).convert_alpha()
+            img.set_alpha(255, pg.RLEACCEL)
+        return img

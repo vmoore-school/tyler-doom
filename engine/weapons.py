@@ -36,8 +36,16 @@ class Weapon:
     def prepare(self, k):
         """Build (or reuse) the sprites for render scale k (1 = the retro 320x200 view)."""
         if k not in self._sized:
-            # convert_alpha: the display's own pixel format, so the big per-frame blit is fast
-            self._sized[k] = [f.convert_alpha() for f in self.make_frames(k)]  # (idle, firing)
+            # convert_alpha: the display's own pixel format; RLE: transparent and opaque runs are
+            # skipped / copied instead of blended pixel by pixel (much faster, above all in the browser)
+            frames = [f.convert_alpha() for f in self.make_frames(k)]  # (idle, firing)
+            for f in frames:
+                # The photos are almost-but-not-quite opaque (alpha ~200-254), which RLE can't skip
+                # blending for: make those pixels fully opaque.
+                solid = pg.mask.from_surface(f, 199).to_surface(setcolor=(0, 0, 0, 255), unsetcolor=(0, 0, 0, 0))
+                f.blit(solid, (0, 0), special_flags=pg.BLEND_RGBA_MAX)
+                f.set_alpha(255, pg.RLEACCEL)
+            self._sized[k] = frames
         self.k, self.frames = k, self._sized[k]
 
     def make_frames(self, k):

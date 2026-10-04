@@ -32,6 +32,7 @@ class Game:
         pg.display.set_caption("TYLER DOOM")
         self.settings = self.load_settings()
         self.clock = pg.time.Clock()
+        self._text_cache = {}
         self.font = pg.font.Font(None, 18)
         self.big = pg.font.Font(None, 32)
         self.mid = pg.font.Font(None, 22)
@@ -106,7 +107,16 @@ class Game:
 
     def apply_display(self):
         """(Re)create the window and the surfaces everything is drawn on."""
-        if self.settings["fullscreen"] and not WEB:
+        if WEB:
+            import platform
+            platform.document.body.style.background = "#000"  # letterbox bars around the canvas
+            # The canvas gets the page's real pixel size (16:10, the page centres it), so "full"
+            # resolution is the screen's own; the browser only scales it if the page is resized.
+            self.page_size = self.browser_size()
+            iw, ih = self.page_size
+            m = min(iw / W, ih / H)
+            self.window = pg.display.set_mode((max(W, round(W * m)), max(H, round(H * m))))
+        elif self.settings["fullscreen"]:
             self.window = pg.display.set_mode((0, 0), pg.FULLSCREEN)
         else:
             self.window = pg.display.set_mode((W * SCALE, H * SCALE))
@@ -114,17 +124,36 @@ class Game:
         m = min(ww / W, wh / H)  # keep the 16:10 picture, with black bars if the screen differs
         self.content_rect = pg.Rect(0, 0, round(W * m), round(H * m))
         self.content_rect.center = (ww // 2, wh // 2)
+        self.window.fill((0, 0, 0))  # letterbox bars (nothing else draws outside content_rect)
         vw, vh = self.view_size(self.settings["resolution"])
         self.k = vw / W
-        self.view = pg.Surface((vw, vh))  # 3D world, weapons, grapple: drawn at the chosen resolution
+        # 3D world, weapons, grapple: drawn at the chosen resolution. At the window's own
+        # resolution, straight into the window (saves copying the whole picture every frame).
+        self.view_in_window = (vw, vh) == self.content_rect.size
+        if self.view_in_window:
+            self.view = self.window.subsurface(self.content_rect)
+        else:
+            self.view = pg.Surface((vw, vh))
         self.renderer = Renderer(self.wall_textures, vw, round(VIEW_H * self.k))
         # The HUD is pixel art laid out for 320x200: at higher resolutions it gets its own
         # transparent layer that's scaled up (sharply) over the view.
         self.screen = self.view if vw == W else pg.Surface((W, H), pg.SRCALPHA)
         self._hud_cache = {}  # blit_hud's scaled tiles
+        self._tints = {}      # tint's solid colour surfaces
+        self.tint((255, 0, 0), 0)  # make the hurt flash's now, not on the first hit
+        self._radar = None    # draw_radar's surfaces
+        self._backdrop = None  # (shade, picture) of the paused game behind a menu
         for w in self.weapons:
             w.prepare(self.k)
         self.menu.resize(self.content_rect.size)
+
+    @staticmethod
+    def browser_size():
+        """The page's size in device pixels."""
+        import platform
+        win = platform.window
+        dpr = float(win.devicePixelRatio or 1)
+        return round(float(win.innerWidth) * dpr), round(float(win.innerHeight) * dpr)
 
     @staticmethod
     def lock_mouse():
@@ -262,12 +291,33 @@ class Game:
 
     def draw_radar(self):
         """Top-right compass: a blip on the ring for each enemy, in its direction relative
-        to where you're facing (up = ahead). Closer enemies are bigger and brighter."""
-        r, p, scr = self.RADAR_R, self.player, self.screen
+        to where you're facing (up = ahead). Closer enemies are bigger and brighter.
+        The dark disk behind it goes in the HUD layer, but the rest changes every frame, so
+        rather than also going there (where it would make its tiles be rebuilt and blended pixel
+        by pixel every frame), it's drawn on a small surface of its own and put on the view
+        after the HUD (draw_radar_marks)."""
+        r, scr = self.RADAR_R, self.screen
         cx, cy = W - r - 4, r + 4
         bg = pg.Surface((r * 2 + 2, r * 2 + 2), pg.SRCALPHA)
         pg.draw.circle(bg, (0, 0, 0, 140), (r + 1, r + 1), r + 1)
         scr.blit(bg, (cx - r - 1, cy - r - 1))
+        self.radar_due = True
+        if scr is self.view:  # no HUD layer (retro resolution): draw it in place
+            self.draw_radar_marks()
+
+    def draw_radar_marks(self):
+        self.radar_due = False
+        r, p, k = self.RADAR_R, self.player, self.k
+        size = r * 2 + 2
+        pos, big = (round((W - size - 3) * k), round(3 * k)), round(size * k)
+        key = (255, 0, 255)
+        if self._radar is None:
+            small, scaled = pg.Surface((size, size)).convert(), pg.Surface((big, big)).convert()
+            scaled.set_colorkey(key)
+            self._radar = (small, scaled)
+        scr, scaled = self._radar
+        scr.fill(key)
+        cx = cy = r + 1
         pg.draw.circle(scr, (90, 90, 90), (cx, cy), r, 1)
         half = FOV / 2  # view cone
         for a in (-half, half):
@@ -276,12 +326,14 @@ class Game:
             if not e.alive:
                 continue
             rel = math.atan2(e.y - p.y, e.x - p.x) - p.angle
-            k = max(0.0, 1 - math.hypot(e.x - p.x, e.y - p.y) / 25)  # 1 = on top of you
-            col = (255, 220, 0) if isinstance(e, boss.Verity) else (255, int(40 + 60 * (1 - k)), int(40 + 60 * (1 - k)))
-            col = tuple(int(c * (0.45 + 0.55 * k)) for c in col)
-            size = 4 if isinstance(e, boss.Verity) else 1 + round(2 * k)
-            pg.draw.circle(scr, col, (cx + math.sin(rel) * (r - 2), cy - math.cos(rel) * (r - 2)), size)
+            near = max(0.0, 1 - math.hypot(e.x - p.x, e.y - p.y) / 25)  # 1 = on top of you
+            col = (255, 220, 0) if isinstance(e, boss.Verity) else (255, int(40 + 60 * (1 - near)), int(40 + 60 * (1 - near)))
+            col = tuple(int(c * (0.45 + 0.55 * near)) for c in col)
+            dot = 4 if isinstance(e, boss.Verity) else 1 + round(2 * near)
+            pg.draw.circle(scr, col, (cx + math.sin(rel) * (r - 2), cy - math.cos(rel) * (r - 2)), dot)
         scr.fill((0, 255, 0), (cx - 1, cy - 1, 3, 3))
+        pg.transform.scale(scr, (big, big), scaled)
+        self.view.blit(scaled, pos)
 
     def wave_size(self):
         return self.wave + 2
@@ -502,9 +554,7 @@ class Game:
             scr.blit(img, img.get_rect(center=(cx, cy + 18)))
         self.draw_rune_warning()
         if p.hurt_flash > 0:
-            ov = pg.Surface((W, VIEW_H), pg.SRCALPHA)
-            ov.fill((255, 0, 0, int(p.hurt_flash * 300)))
-            scr.blit(ov, (0, 0))
+            self.tint((255, 0, 0), p.hurt_flash * 300)
         for i in range(self.grenades):  # under the radar, out of the way of the held weapon
             scr.blit(self.grenade_icon, (W - 18 - i * 16, self.RADAR_R * 2 + 10))
         y = 3
@@ -524,7 +574,7 @@ class Game:
         else:
             t = self.death_t or 0.0
             if self.killed_by_verity():
-                boss.draw_brain_eating(scr, t, self.dead_face, self.big)
+                boss.draw_brain_eating(scr, t, self.dead_face, self.big, self.tint)
             else:
                 self.draw_death(t)
             if self.death_scene_done():
@@ -536,6 +586,22 @@ class Game:
             scr.blit(img, img.get_rect(center=(cx, cy - 40 + i * 24)))
         if self.notice_t > 0 and p.alive and not self.menu.active:
             self.draw_notice()
+
+    def tint(self, color, alpha, rect=(0, 0, W, VIEW_H)):
+        """Lay translucent colour over part of the 3D view (rect in 320x200 HUD pixels).
+        It goes straight onto the view, under the HUD, as a solid surface with whole-surface
+        alpha: a per-pixel-alpha overlay in the HUD layer would make every HUD tile it touches
+        change and get blended pixel by pixel, which is very slow in the browser."""
+        alpha = min(255, int(alpha))
+        k = self.k
+        x0, y0, x1, y1 = (round(v * k) for v in (rect[0], rect[1], rect[0] + rect[2], rect[1] + rect[3]))
+        surf = self._tints.get(color)
+        if surf is None:
+            surf = self._tints[color] = pg.Surface(self.view.get_size()).convert()
+            surf.fill(color)
+        if alpha > 0:
+            surf.set_alpha(alpha)
+            self.view.blit(surf, (x0, y0), (0, 0, x1 - x0, y1 - y0))
 
     def draw_score_status(self):
         """Death screen footer: name prompt / submission status, then the restart hint."""
@@ -596,10 +662,8 @@ class Game:
             return
         k = max(r.t / r.delay for r in runes)
         pulse = 0.6 + 0.4 * math.sin(k * k * 40)
-        ov = pg.Surface((W, 50), pg.SRCALPHA)
-        for y in range(50):
-            ov.fill((170, 60, 255, int(pulse * 150 * y / 50)), (0, y, W, 1))
-        self.screen.blit(ov, (0, VIEW_H - 50))
+        for y in range(0, 50, 5):  # stronger towards the bottom
+            self.tint((170, 60, 255), pulse * 150 * (y + 2.5) / 50, (0, VIEW_H - 50 + y, W, 5))
         img = self.font.render("RUNE! MOVE!", True, (235, 200, 255))
         self.screen.blit(img, img.get_rect(center=(W // 2, VIEW_H - 30)))
 
@@ -609,9 +673,7 @@ class Game:
     def draw_death(self, t):
         """Generic death screen: fade to red, your greyed-out face next to whoever got you."""
         scr, cx, cy = self.screen, W // 2, VIEW_H // 2
-        shade = pg.Surface((W, VIEW_H), pg.SRCALPHA)
-        shade.fill((60, 0, 0, min(210, int(t * 260))))
-        scr.blit(shade, (0, 0))
+        self.tint((60, 0, 0), min(210, t * 260))
         if t < 0.5:
             return
         a = min(255, int((t - 0.5) * 400))  # everything below fades in
@@ -641,9 +703,7 @@ class Game:
     def draw_boss_ui(self):
         scr = self.screen
         if self.backrooms_t > 0:  # the Backrooms: buzzing yellow haze
-            ov = pg.Surface((W, VIEW_H), pg.SRCALPHA)
-            ov.fill((210, 190, 70, 70 + int(30 * math.sin(self.backrooms_t * 40))))
-            scr.blit(ov, (0, 0))
+            self.tint((210, 190, 70), 70 + 30 * math.sin(self.backrooms_t * 40))
         if self.invert_t > 0:
             img = self.font.render("CONTROLS INVERTED", True, (90, 140, 255))
             scr.blit(img, img.get_rect(center=(W // 2, VIEW_H - 30)))
@@ -694,14 +754,31 @@ class Game:
         for x, w, value, label in boxes:
             pg.draw.rect(scr, (45, 45, 45), (x, top + 2, w, BAR_H - 4))
             pg.draw.rect(scr, (100, 100, 100), (x, top + 2, w, BAR_H - 4), 1)
-            font = next((f for f in (self.bar_font, self.mid, self.font) if f.size(str(value))[0] <= w - 4), self.font)
-            img = font.render(str(value), True, (200, 30, 30))
+            img = self.bar_text(str(value), w - 4)
             scr.blit(img, img.get_rect(center=(x + w // 2, top + 13)))
-            img = self.label_font.render(label[:14], True, (200, 200, 200))
+            img = self.text(self.label_font, label[:14], (200, 200, 200))
             scr.blit(img, img.get_rect(center=(x + w // 2, top + BAR_H - 7)))
         face = self.portrait.render(p.health, p.hurt_flash, not p.alive)
         pg.draw.rect(scr, (20, 20, 20), (face_x - 2, top + 1, face_w + 4, BAR_H - 2))
         scr.blit(face, (face_x, top + 2))
+
+    def text(self, font, text, color):
+        """font.render, remembered: the status bar redraws the same few strings every frame."""
+        key = (font, text, color)
+        img = self._text_cache.get(key)
+        if img is None:
+            if len(self._text_cache) > 200:
+                self._text_cache.clear()
+            img = self._text_cache[key] = font.render(text, True, color)
+        return img
+
+    def bar_text(self, value, width):
+        """A status bar number in the biggest font it fits in."""
+        img = self._text_cache.get((value, width))
+        if img is None:
+            font = next((f for f in (self.bar_font, self.mid, self.font) if f.size(value)[0] <= width), self.font)
+            img = self._text_cache[(value, width)] = self.text(font, value, (200, 30, 30))
+        return img
 
     HUD_TILE = 40
 
@@ -724,23 +801,56 @@ class Game:
             c = cache["bar"] = (data, pg.transform.scale(bar, (vw, vh - bar_y)).convert(), (0, bar_y))
         view.blit(c[1], c[2])
         t = self.HUD_TILE
+        batch = []
+        raw, pitch = hud.get_buffer().raw, hud.get_pitch()
+        frame = cache["frame"] = cache.get("frame", 0) + 1
         for ty in range(0, VIEW_H, t):
-            for tx in range(0, W, t):
-                r = pg.Rect(tx, ty, min(t, W - tx), min(t, VIEW_H - ty))
-                tile = hud.subsurface(r)
-                data = pg.image.tobytes(tile, "RGBA")
-                c = cache.get((tx, ty))
-                if c is None or c[0] != data:
-                    img = pos = None
-                    if tile.get_bounding_rect().w:  # anything drawn here?
-                        pos = (round(r.x * sx), round(r.y * sy))
-                        size = (round(r.right * sx) - pos[0], round(r.bottom * sy) - pos[1])
-                        img = pg.transform.scale(tile, size).convert_alpha()
-                    c = cache[(tx, ty)] = (data, img, pos)
-                if c[1] is not None:
-                    view.blit(c[1], c[2])
+            # Whole rows of tiles first: usually only the radar's row has changed.
+            data = raw[ty * pitch:min(ty + t, VIEW_H) * pitch]
+            c = cache.get(ty)
+            if c is None or c[0] != data:
+                tiles = []
+                for tx in range(0, W, t):
+                    r = pg.Rect(tx, ty, min(t, W - tx), min(t, VIEW_H - ty))
+                    tile = hud.subsurface(r)
+                    tdata = pg.image.tobytes(tile, "RGBA")
+                    tc = cache.get((tx, ty))
+                    if tc is None or tc[0] != tdata:
+                        img = pos = None
+                        if tile.get_bounding_rect().w:  # anything drawn here?
+                            pos = (round(r.x * sx), round(r.y * sy))
+                            size = (round(r.right * sx) - pos[0], round(r.bottom * sy) - pos[1])
+                            img = pg.transform.scale(tile, size).convert_alpha()
+                            # RLE (see Weapon.prepare) pays off over several frames, not for tiles
+                            # that change every frame (the radar)
+                            if tc is None or tc[3] < frame - 1:
+                                img.set_alpha(255, pg.RLEACCEL)
+                        tc = cache[(tx, ty)] = (tdata, img, pos, frame)
+                    if tc[1] is not None:
+                        tiles.append(tc[1:3])
+                c = cache[ty] = (data, tiles)
+            batch += c[1]
+        view.blits(batch, doreturn=False)
 
     def draw_frame(self):
+        win, rect = self.window, self.content_rect
+        if self.menu.active and (not self.menu.title_screen or self.menu.current in ("help", "leaderboard")):
+            # Paused (or nearly blacked out behind the help / leaderboard): the game behind the
+            # menu doesn't change, so it's drawn (and darkened) once.
+            if self._backdrop is None or self._backdrop[0] != self.menu.shade_alpha():
+                self.draw_game()
+                self.menu.draw_shade(win.subsurface(rect))
+                self._backdrop = (self.menu.shade_alpha(), win.subsurface(rect).copy())
+            else:
+                win.blit(self._backdrop[1], rect)
+            self.menu.draw(win.subsurface(rect), shade=False)
+            return
+        self._backdrop = None
+        self.draw_game()
+        if self.menu.active:
+            self.menu.draw(win.subsurface(rect))
+
+    def draw_game(self):
         view, s = self.view, self.k
         self.renderer.render(view, self.world, self.player)
         if self.player.alive and not self.menu.title_screen:
@@ -754,31 +864,32 @@ class Game:
         if not self.menu.title_screen:
             if self.screen is not view:
                 self.screen.fill((0, 0, 0, 0))
+            self.radar_due = False
             self.draw_hud()
             if self.screen is not view:
                 self.blit_hud(view)
-        win, rect = self.window, self.content_rect
-        if rect.size != win.get_size():
-            win.fill((0, 0, 0))  # letterbox bars
-        if view.get_size() == rect.size:
-            win.blit(view, rect)
-        else:
-            pg.transform.scale(view, rect.size, win.subsurface(rect))
-        if self.menu.active:
-            self.menu.draw(win.subsurface(rect))
+                if self.radar_due:
+                    self.draw_radar_marks()
+        if not self.view_in_window:
+            pg.transform.scale(view, self.content_rect.size, self.window.subsurface(self.content_rect))
 
     async def run(self):
+        self.size_checked = 0
         while True:
             dt = min(self.clock.tick(FPS) / 1000, 0.05)
             self.handle_input(dt)
             self.leaderboard.poll()
-            if self.menu.title_screen:  # slowly look around the level behind the title
+            if self.menu.title_screen and self._backdrop is None:  # slowly look around the level behind the title
                 self.player.angle += 0.15 * dt
             elif not self.menu.active:
                 self.update(dt)
             self.draw_frame()
             pg.display.flip()
             await asyncio.sleep(0)  # hand control back to the browser each frame
+            if WEB and pg.time.get_ticks() - self.size_checked > 500:  # page resized (e.g. F11)?
+                self.size_checked = pg.time.get_ticks()
+                if self.browser_size() != self.page_size:
+                    self.apply_display()
 
 
 if __name__ == "__main__":
