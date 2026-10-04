@@ -1,10 +1,12 @@
 import asyncio
+import json
 import math
+import os
 import sys
 import pygame as pg
 
 from engine import assets
-from engine.settings import W, H, VIEW_H, BAR_H, SCALE, FOV, FPS, MOUSE_SENS, MOVE_SPEED, PITCH_SENS, MAX_PITCH, HEADSHOT_MULT
+from engine.settings import W, H, VIEW_H, BAR_H, SCALE, FOV, RESOLUTIONS, FPS, MOUSE_SENS, MOVE_SPEED, PITCH_SENS, MAX_PITCH, HEADSHOT_MULT
 from engine.world import World, LEVEL, cast_ray
 from engine.entities import Player, SPAWN_POOL
 from engine.weapons import WEAPON_TYPES
@@ -17,15 +19,16 @@ from engine import boss
 from engine.menus import Menus
 
 WEB = sys.platform == "emscripten"  # running in the browser via pygbag
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+DEFAULT_SETTINGS = {"fullscreen": False, "resolution": "retro"}
 
 
 class Game:
     def __init__(self):
         pg.mixer.pre_init(22050, -16, 1, 256)
         pg.init()
-        self.window = pg.display.set_mode((W * SCALE, H * SCALE))
         pg.display.set_caption("Doom-ish")
-        self.screen = pg.Surface((W, H))
+        self.settings = self.load_settings()
         self.clock = pg.time.Clock()
         self.font = pg.font.Font(None, 18)
         self.big = pg.font.Font(None, 32)
@@ -33,7 +36,10 @@ class Game:
         self.bar_font = pg.font.Font(None, 26)
         self.label_font = pg.font.Font(None, 12)
         self.portrait = WebcamPortrait(size=(BAR_H - 4, BAR_H - 4))
-        self.renderer = Renderer({k: f() for k, f in assets.WALLS.items()})
+        self.wall_textures = {k: f() for k, f in assets.WALLS.items()}
+        self.weapons = []
+        self.menu = Menus(self)
+        self.apply_display()  # the window has to exist before images can be loaded
         self.sounds = {
             "pistol": assets.noise_sound(0.15, 0.5, 3, 1),
             "shotgun": assets.noise_sound(0.35, 0.8, 2, 2),
@@ -49,8 +55,60 @@ class Game:
             cls.get_frames()
         self.deaths = 0
         self.reset()
-        self.menu = Menus(self)
         self.menu.open("main")
+
+    # --- settings / display ---
+
+    @staticmethod
+    def load_settings():
+        settings = dict(DEFAULT_SETTINGS)
+        try:
+            with open(SETTINGS_FILE) as f:
+                settings.update({k: v for k, v in json.load(f).items() if k in DEFAULT_SETTINGS})
+        except (OSError, ValueError):
+            pass
+        if settings["resolution"] not in RESOLUTIONS:
+            settings["resolution"] = "retro"
+        return settings
+
+    def save_settings(self):
+        try:
+            with open(SETTINGS_FILE, "w") as f:
+                json.dump(self.settings, f, indent=2)
+        except OSError:
+            pass  # e.g. read-only install; the setting still applies for this session
+
+    def change_setting(self, key, value):
+        self.settings[key] = value
+        self.save_settings()
+        self.apply_display()
+
+    def view_size(self, resolution):
+        """Size of the game picture (3D view + status bar) for a resolution setting."""
+        m = self.content_rect.width / W  # how much the 320x200 picture is scaled up on screen
+        k = {"retro": 1, "medium": max(1.0, m / 2), "full": m}[resolution]
+        return round(W * k), round(H * k)
+
+    def apply_display(self):
+        """(Re)create the window and the surfaces everything is drawn on."""
+        if self.settings["fullscreen"] and not WEB:
+            self.window = pg.display.set_mode((0, 0), pg.FULLSCREEN)
+        else:
+            self.window = pg.display.set_mode((W * SCALE, H * SCALE))
+        ww, wh = self.window.get_size()
+        m = min(ww / W, wh / H)  # keep the 16:10 picture, with black bars if the screen differs
+        self.content_rect = pg.Rect(0, 0, round(W * m), round(H * m))
+        self.content_rect.center = (ww // 2, wh // 2)
+        vw, vh = self.view_size(self.settings["resolution"])
+        self.k = vw / W
+        self.view = pg.Surface((vw, vh))  # 3D world, weapons, grapple: drawn at the chosen resolution
+        self.renderer = Renderer(self.wall_textures, vw, round(VIEW_H * self.k))
+        # The HUD is pixel art laid out for 320x200: at higher resolutions it gets its own
+        # transparent layer that's scaled up (sharply) over the view.
+        self.screen = self.view if vw == W else pg.Surface((W, H), pg.SRCALPHA)
+        for w in self.weapons:
+            w.prepare(self.k)
+        self.menu.resize(self.content_rect.size)
 
     @staticmethod
     def lock_mouse():
@@ -79,6 +137,8 @@ class Game:
         self.world = World(LEVEL)
         self.player = Player(*self.world.start)
         self.weapons = [w() for w in WEAPON_TYPES]
+        for w in self.weapons:
+            w.prepare(self.k)
         self.weapon = self.weapons[0]
         self.grapple = Grapple()
         self.walk_t = 0.0
@@ -199,7 +259,7 @@ class Game:
             if not (0 < along < wall and abs(dy * c - dx * s) < e.radius):
                 continue
             # Height (world units, floor = 0, eye = 0.5) the crosshair points at at this distance.
-            z = 0.5 + p.z + p.pitch * along / self.renderer.proj
+            z = 0.5 + p.z + p.pitch * along / self.renderer.base_proj
             z0 = getattr(e, "z", 0.0)  # floating enemies
             if z0 <= z <= z0 + e.scale:
                 hits.append((along, e, z >= z0 + e.scale * (1 - e.head_frac)))
@@ -216,7 +276,7 @@ class Game:
         self.grenades -= 1
         self.throw_t = 0.4
         c, s = math.cos(p.angle), math.sin(p.angle)
-        up = p.pitch / self.renderer.proj  # look up to throw higher/further
+        up = p.pitch / self.renderer.base_proj  # look up to throw higher/further
         speed = 7.0
         self.world.projectiles.append(
             Grenade(p.x + c * 0.3, p.y + s * 0.3, 0.45, c * speed, s * speed, 2.5 + up * speed))
@@ -519,6 +579,33 @@ class Game:
         pg.draw.rect(scr, (20, 20, 20), (face_x - 2, top + 1, face_w + 4, BAR_H - 2))
         scr.blit(face, (face_x, top + 2))
 
+    def draw_frame(self):
+        view, s = self.view, self.k
+        self.renderer.render(view, self.world, self.player)
+        if self.player.alive and not self.menu.title_screen:
+            bob = (math.sin(self.walk_t * 8) * 4, abs(math.cos(self.walk_t * 8)) * 4)
+            self.weapon.draw(view, bob)
+            self.grapple.draw(view, self, bob)
+            if self.throw_t > 0.2:  # grenade leaving the hand
+                t = (0.4 - self.throw_t) / 0.2
+                img = pg.transform.smoothscale(Grenade.frames()[0], (int((50 - 30 * t) * s),) * 2)
+                view.blit(img, (int((W // 2 + 40 - 30 * t) * s), int((VIEW_H - 40 - 50 * t) * s)))
+        if not self.menu.title_screen:
+            if self.screen is not view:
+                self.screen.fill((0, 0, 0, 0))
+            self.draw_hud()
+            if self.screen is not view:
+                view.blit(pg.transform.scale(self.screen, view.get_size()), (0, 0))
+        win, rect = self.window, self.content_rect
+        if rect.size != win.get_size():
+            win.fill((0, 0, 0))  # letterbox bars
+        if view.get_size() == rect.size:
+            win.blit(view, rect)
+        else:
+            pg.transform.scale(view, rect.size, win.subsurface(rect))
+        if self.menu.active:
+            self.menu.draw(win.subsurface(rect))
+
     async def run(self):
         while True:
             dt = min(self.clock.tick(FPS) / 1000, 0.05)
@@ -527,20 +614,7 @@ class Game:
                 self.player.angle += 0.15 * dt
             elif not self.menu.active:
                 self.update(dt)
-            self.renderer.render(self.screen, self.world, self.player)
-            if self.player.alive and not self.menu.title_screen:
-                bob = (math.sin(self.walk_t * 8) * 4, abs(math.cos(self.walk_t * 8)) * 4)
-                self.weapon.draw(self.screen, bob)
-                self.grapple.draw(self.screen, self, bob)
-                if self.throw_t > 0.2:  # grenade leaving the hand
-                    k = (0.4 - self.throw_t) / 0.2
-                    img = pg.transform.smoothscale(Grenade.frames()[0], (int(50 - 30 * k),) * 2)
-                    self.screen.blit(img, (W // 2 + 40 - int(30 * k), VIEW_H - 40 - int(50 * k)))
-            if not self.menu.title_screen:
-                self.draw_hud()
-            pg.transform.scale(self.screen, self.window.get_size(), self.window)
-            if self.menu.active:
-                self.menu.draw(self.window)
+            self.draw_frame()
             pg.display.flip()
             await asyncio.sleep(0)  # hand control back to the browser each frame
 

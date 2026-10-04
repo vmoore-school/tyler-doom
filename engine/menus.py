@@ -1,7 +1,9 @@
-"""Main menu, pause menu and help screens. Drawn straight onto the window (not the low-res
-game surface) so text stays sharp. Keyboard (W/S or arrows, Enter) and mouse both work."""
+"""Main menu, pause menu, settings and help screens. Drawn straight onto the window (not the
+low-res game surface) so text stays sharp at any window size: layout is written for a 960x600
+canvas and scaled. Keyboard (W/S or arrows, Enter) and mouse both work."""
 import sys
 import pygame as pg
+from .settings import RESOLUTIONS
 
 WEB = sys.platform == "emscripten"
 
@@ -18,7 +20,7 @@ CONTROLS = [
     ("Right click / E (hold)", "Grapple"),
     ("Middle click / G", "Throw a David grenade"),
     ("Z / X / C", "Answer Verity's pop quiz"),
-    ("Tab / Esc", "Pause"),
+    ("Tab / Esc", "Pause (settings are in the pause and main menus)"),
     ("R", "Restart after dying"),
 ]
 
@@ -54,17 +56,24 @@ def wrap(text, font, width):
 
 
 class Menus:
+    LW, LH = 960, 600  # logical canvas the layout is written for
+
     def __init__(self, game):
         self.game = game
-        self.title_font = pg.font.Font(None, 110)
-        self.item_font = pg.font.Font(None, 48)
-        self.text_font = pg.font.Font(None, 26)
-        self.small_font = pg.font.Font(None, 22)
-        self.current = None  # "main", "pause", "help" or None while playing
-        self.back_to = None  # where the help screen returns to
+        self.current = None  # "main", "pause", "help", "settings" or None while playing
+        self.back_to = None  # where help / settings return to
         self.sel = 0
         self.page = 0
         self.buttons = []    # (rect, action) of what's on screen, for the mouse
+        self.resize((self.LW, self.LH))
+
+    def resize(self, size):
+        """Fit the layout to the area the game picture occupies on screen."""
+        self.m = size[0] / self.LW
+        font = lambda px: pg.font.Font(None, max(8, round(px * self.m)))
+        self.title_font, self.item_font = font(110), font(48)
+        self.text_font, self.small_font = font(26), font(22)
+        self.option_font = font(36)
 
     @property
     def active(self):
@@ -72,11 +81,11 @@ class Menus:
 
     @property
     def title_screen(self):
-        """True on the main menu (and its help screen): no game running behind it."""
-        return self.current == "main" or (self.current == "help" and self.back_to == "main")
+        """True on the main menu (and screens opened from it): no game running behind it."""
+        return self.current == "main" or (self.current in ("help", "settings") and self.back_to == "main")
 
     def open(self, name):
-        if name == "help":
+        if name in ("help", "settings"):
             self.back_to, self.page = self.current, 0
         self.current, self.sel = name, 0
         self.game.unlock_mouse()
@@ -86,13 +95,20 @@ class Menus:
         self.game.lock_mouse()
 
     def items(self):
+        quit_ = [] if WEB else [("QUIT", "quit")]  # a web page can't quit
         if self.current == "main":
-            items = [("PLAY", "play"), ("HELP", "help")]
-        elif self.current == "pause":
-            items = [("RESUME", "resume"), ("HELP", "help"), ("MAIN MENU", "main")]
-        else:
-            return []
-        return items if WEB else items + [("QUIT", "quit")]  # a web page can't quit
+            return [("PLAY", "play"), ("HELP", "help"), ("SETTINGS", "settings")] + quit_
+        if self.current == "pause":
+            return [("RESUME", "resume"), ("HELP", "help"), ("SETTINGS", "settings"), ("MAIN MENU", "main")] + quit_
+        if self.current == "settings":
+            g, st = self.game, self.game.settings
+            items = []
+            if not WEB:  # browsers go fullscreen with F11 instead
+                items.append((f"DISPLAY: {'FULLSCREEN' if st['fullscreen'] else 'WINDOWED'}", "fullscreen"))
+            w, h = g.view_size(st["resolution"])
+            items.append((f"RESOLUTION: {st['resolution'].upper()} ({w}x{h})", "resolution"))
+            return items + [("BACK", "back")]
+        return []
 
     # --- input ---
 
@@ -107,31 +123,42 @@ class Menus:
                     self.act("back")
             elif self.current == "pause" and (back or ev.key == pg.K_TAB):
                 self.act("resume")
+            elif self.current == "settings" and back:
+                self.act("back")
             elif ev.key in (pg.K_w, pg.K_UP):
                 self.sel = (self.sel - 1) % len(items)
             elif ev.key in (pg.K_s, pg.K_DOWN):
                 self.sel = (self.sel + 1) % len(items)
             elif ev.key in (pg.K_RETURN, pg.K_SPACE):
                 self.act(items[self.sel][1])
-        elif ev.type == pg.MOUSEMOTION:
+            elif self.current == "settings" and ev.key in (pg.K_a, pg.K_LEFT, pg.K_d, pg.K_RIGHT):
+                step = -1 if ev.key in (pg.K_a, pg.K_LEFT) else 1
+                if items[self.sel][1] != "back":
+                    self.act(items[self.sel][1], step)
+        elif ev.type in (pg.MOUSEMOTION, pg.MOUSEBUTTONDOWN):
+            pos = self.to_menu(ev.pos)
             for i, (rect, action) in enumerate(self.buttons):
-                if rect.collidepoint(ev.pos) and i < len(items):
-                    self.sel = i
-        elif ev.type == pg.MOUSEBUTTONDOWN and ev.button == 1:
-            for rect, action in self.buttons:
-                if rect.collidepoint(ev.pos):
-                    self.act(action)
-                    break
+                if rect.collidepoint(pos):
+                    if ev.type == pg.MOUSEMOTION:
+                        self.sel = i if i < len(items) else self.sel
+                    elif ev.button == 1:
+                        self.act(action)
+                        break
 
-    def act(self, action):
+    def to_menu(self, pos):
+        """Window position -> position on the menu surface (which is offset by any black bars)."""
+        r = self.game.content_rect
+        return pos[0] - r.x, pos[1] - r.y
+
+    def act(self, action, step=1):
         g = self.game
         if action == "play":
             g.reset()
             self.close()
         elif action == "resume":
             self.close()
-        elif action == "help":
-            self.open("help")
+        elif action in ("help", "settings"):
+            self.open(action)
         elif action == "back":
             self.current, self.sel = self.back_to, 0
         elif action == "main":
@@ -139,10 +166,15 @@ class Menus:
             self.open("main")
         elif action in ("page0", "page1"):
             self.page = int(action[-1])
+        elif action == "fullscreen":
+            g.change_setting("fullscreen", not g.settings["fullscreen"])
+        elif action == "resolution":
+            i = RESOLUTIONS.index(g.settings["resolution"])
+            g.change_setting("resolution", RESOLUTIONS[(i + step) % len(RESOLUTIONS)])
         elif action == "quit":
             g.quit()
 
-    # --- drawing ---
+    # --- drawing (positions are on the 960x600 logical canvas) ---
 
     def draw(self, win):
         shade = pg.Surface(win.get_size(), pg.SRCALPHA)
@@ -152,58 +184,62 @@ class Menus:
         if self.current == "help":
             self.draw_help(win)
             return
-        cx = win.get_width() // 2
-        if self.current == "main":
-            self.text(win, self.title_font, "DOOM-ISH", RED, (cx, 150), shadow=True)
-            self.text(win, self.text_font, "Wave survival against your friends", GREY, (cx, 215))
-            y = 300
-        else:
-            self.text(win, self.title_font, "PAUSED", RED, (cx, 150), shadow=True)
-            self.text(win, self.text_font, f"Wave {self.game.wave}", GREY, (cx, 215))
-            y = 270
+        cx = self.LW // 2
+        heading = {"main": "DOOM-ISH", "pause": "PAUSED", "settings": "SETTINGS"}[self.current]
+        sub = {"main": "Wave survival against your friends", "pause": f"Wave {self.game.wave}",
+               "settings": "Enter / click or A/D to change"}[self.current]
+        self.text(win, self.title_font, heading, RED, (cx, 130), shadow=True)
+        self.text(win, self.text_font, sub, GREY, (cx, 190))
+        font = self.item_font if self.current != "settings" else self.option_font
+        gap = 50
         for i, (label, action) in enumerate(self.items()):
             selected = i == self.sel
-            rect = self.text(win, self.item_font, f"> {label} <" if selected else label,
-                             YELLOW if selected else WHITE, (cx, y + i * 55))
-            self.buttons.append((rect.inflate(60, 12), action))
+            rect = self.text(win, font, f"> {label} <" if selected else label,
+                             YELLOW if selected else WHITE, (cx, 255 + i * gap))
+            self.buttons.append((rect.inflate(round(60 * self.m), round(12 * self.m)), action))
+        if self.current == "settings":
+            note = "Higher resolutions look sharper but run slower (the HUD stays pixel art)"
+            self.text(win, self.small_font, note, GREY, (cx, 255 + len(self.items()) * gap + 10))
         hint = "W/S or mouse to choose, Enter or click to select"
         if self.current == "pause":  # sits above the status bar
-            self.text(win, self.small_font, hint + ",  Tab to resume", GREY, (cx, 480))
+            self.text(win, self.small_font, hint + ",  Tab to resume", GREY, (cx, 482))
         else:
-            self.text(win, self.small_font, hint, GREY, (cx, win.get_height() - 30))
+            self.text(win, self.small_font, hint, GREY, (cx, self.LH - 30))
 
     def draw_help(self, win):
-        w, h = win.get_size()
+        w, h, m = self.LW, self.LH, self.m
         self.text(win, self.item_font, "HELP", RED, (w // 2, 38), shadow=True)
         for i, label in enumerate(("CONTROLS", "HOW TO PLAY")):  # tabs
             rect = self.text(win, self.text_font, label, YELLOW if i == self.page else GREY,
                              (w // 2 + (i * 2 - 1) * 110, 82))
             if i == self.page:
-                pg.draw.line(win, YELLOW, (rect.left, rect.bottom + 3), (rect.right, rect.bottom + 3), 2)
-            self.buttons.append((rect.inflate(30, 16), f"page{i}"))
+                pg.draw.line(win, YELLOW, (rect.left, rect.bottom + 3 * m), (rect.right, rect.bottom + 3 * m),
+                             max(1, round(2 * m)))
+            self.buttons.append((rect.inflate(round(30 * m), round(16 * m)), f"page{i}"))
         y, left = 118, 80
         if self.page == 0:
             for key, what in CONTROLS:
                 self.text(win, self.text_font, key, YELLOW, (left, y), anchor="topleft")
-                for line in wrap(what, self.text_font, w - 340 - left):
+                for line in wrap(what, self.text_font, (w - 340 - left) * m):
                     self.text(win, self.text_font, line, WHITE, (330, y), anchor="topleft")
                     y += 24
                 y += 5
         else:
             for para in HOW_TO_PLAY:
-                for line in wrap(para, self.text_font, w - 2 * left):
+                for line in wrap(para, self.text_font, (w - 2 * left) * m):
                     self.text(win, self.text_font, line, WHITE, (left, y), anchor="topleft")
                     y += 23
                 y += 7
         rect = self.text(win, self.text_font, "> BACK <", YELLOW, (w // 2, h - 42))
-        self.buttons.append((rect.inflate(60, 16), "back"))
+        self.buttons.append((rect.inflate(round(60 * m), round(16 * m)), "back"))
         self.text(win, self.small_font, "A/D to switch tabs, Esc to go back", GREY, (w // 2, h - 16))
 
-    @staticmethod
-    def text(win, font, s, color, pos, anchor="center", shadow=False):
+    def text(self, win, font, s, color, pos, anchor="center", shadow=False):
+        """Draw text at a logical position; returns its rect in window pixels."""
         img = font.render(s, True, color)
-        rect = img.get_rect(**{anchor: pos})
+        rect = img.get_rect(**{anchor: (round(pos[0] * self.m), round(pos[1] * self.m))})
         if shadow:
-            win.blit(font.render(s, True, (0, 0, 0)), rect.move(4, 4))
+            off = max(1, round(4 * self.m))
+            win.blit(font.render(s, True, (0, 0, 0)), rect.move(off, off))
         win.blit(img, rect)
         return rect

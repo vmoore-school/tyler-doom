@@ -40,6 +40,15 @@ To publish on GitHub Pages: Settings -> Pages -> Source: GitHub Actions, then ru
 | R | Restart after dying |
 | Tab / Esc | Pause menu |
 
+## Settings
+
+From the main or pause menu:
+
+- **Display**: windowed or fullscreen (fullscreen keeps the 16:10 picture, with black bars if your screen is a different shape). Not in the browser: use F11 there.
+- **Resolution**: the 3D view at *Retro* 320x200, *Medium* (half your window/screen resolution) or *Full* (your window/screen resolution). Higher looks sharper but runs slower; the HUD stays pixel art.
+
+Settings are saved to `settings.json` next to `main.py`.
+
 ## Gameplay
 
 - Each wave has one more enemy than the last. Clearing it refills health, ammo and grenades.

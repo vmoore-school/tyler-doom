@@ -2,7 +2,7 @@ import math
 import os
 import pygame as pg
 from .assets import PHOTO_DIR
-from .settings import W, VIEW_H, WALL_H
+from .settings import WALL_H
 from .world import cast_ray
 
 
@@ -40,7 +40,7 @@ class Grapple:
     def fire(self, game):
         if self.state != "idle":
             return
-        p, proj = game.player, game.renderer.proj
+        p, proj = game.player, game.renderer.base_proj
         c, s = math.cos(p.angle), math.sin(p.angle)
         eye = 0.5 + p.z
         slope = p.pitch / proj  # height gained per unit travelled along the aim (same as hitscan)
@@ -105,7 +105,7 @@ class Grapple:
         c, s = math.cos(p.angle), math.sin(p.angle)
         depth = dx * c + dy * s
         side = -dx * s + dy * c
-        return (W / 2 + side / depth * r.proj, r.horizon + r.proj / depth * (0.5 + p.z - pt[2]), depth)
+        return (r.w / 2 + side / depth * r.proj, r.horizon + r.proj / depth * (0.5 + p.z - pt[2]), depth)
 
     def draw(self, screen, game, bob):
         if self.state == "idle":
@@ -120,7 +120,7 @@ class Grapple:
             pts.append(tuple(av + (bv - av) * t for av, bv in zip(a, b)))
             if t >= 1.0:
                 break
-        bx, by = int(bob[0]), int(bob[1])
+        bx, by = int(bob[0] * game.renderer.k), int(bob[1] * game.renderer.k)
         angle = 0.0
         for far, close in reversed(list(zip(pts[1:], pts[:-1]))):  # far links first
             (fx, fy, fd), (cx, cy, cd) = self.project(game, far), self.project(game, close)

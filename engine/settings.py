@@ -13,3 +13,4 @@ VIEW_H = H - BAR_H       # 3D view height
 PITCH_SENS = 0.5         # vertical look, screen pixels per mouse pixel
 MAX_PITCH = 150          # how far the horizon can shift up/down (pixels)
 HEADSHOT_MULT = 2.5
+RESOLUTIONS = ["retro", "medium", "full"]  # 3D view: 320x200, half the screen's resolution, the screen's own

@@ -16,6 +16,7 @@ build/
 dist/
 
 # Secrets / local config
+settings.json
 .env
 .env.*
 
