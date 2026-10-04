@@ -119,6 +119,7 @@ class Game:
         # The HUD is pixel art laid out for 320x200: at higher resolutions it gets its own
         # transparent layer that's scaled up (sharply) over the view.
         self.screen = self.view if vw == W else pg.Surface((W, H), pg.SRCALPHA)
+        self._hud_cache = {}  # blit_hud's scaled tiles
         for w in self.weapons:
             w.prepare(self.k)
         self.menu.resize(self.content_rect.size)
@@ -668,6 +669,43 @@ class Game:
         pg.draw.rect(scr, (20, 20, 20), (face_x - 2, top + 1, face_w + 4, BAR_H - 2))
         scr.blit(face, (face_x, top + 2))
 
+    HUD_TILE = 40
+
+    def blit_hud(self, view):
+        """Scale the 320x200 HUD layer up over the view. Scaling and alpha-blending the whole
+        layer every frame is slow (very slow in the browser), and most of it is transparent and
+        unchanged frame to frame. So it's done in tiles: each tile is rescaled only when its pixels
+        change and skipped when empty, and the solid status bar is kept as a fast opaque surface."""
+        hud, cache = self.screen, self._hud_cache
+        vw, vh = view.get_size()
+        if cache.get("size") != (vw, vh):
+            cache.clear()
+            cache["size"] = (vw, vh)
+        sx, sy = vw / W, vh / H
+        bar = hud.subsurface((0, VIEW_H, W, BAR_H))
+        data = pg.image.tobytes(bar, "RGB")
+        c = cache.get("bar")
+        if c is None or c[0] != data:
+            bar_y = round(VIEW_H * sy)
+            c = cache["bar"] = (data, pg.transform.scale(bar, (vw, vh - bar_y)).convert(), (0, bar_y))
+        view.blit(c[1], c[2])
+        t = self.HUD_TILE
+        for ty in range(0, VIEW_H, t):
+            for tx in range(0, W, t):
+                r = pg.Rect(tx, ty, min(t, W - tx), min(t, VIEW_H - ty))
+                tile = hud.subsurface(r)
+                data = pg.image.tobytes(tile, "RGBA")
+                c = cache.get((tx, ty))
+                if c is None or c[0] != data:
+                    img = pos = None
+                    if tile.get_bounding_rect().w:  # anything drawn here?
+                        pos = (round(r.x * sx), round(r.y * sy))
+                        size = (round(r.right * sx) - pos[0], round(r.bottom * sy) - pos[1])
+                        img = pg.transform.scale(tile, size).convert_alpha()
+                    c = cache[(tx, ty)] = (data, img, pos)
+                if c[1] is not None:
+                    view.blit(c[1], c[2])
+
     def draw_frame(self):
         view, s = self.view, self.k
         self.renderer.render(view, self.world, self.player)
@@ -684,7 +722,7 @@ class Game:
                 self.screen.fill((0, 0, 0, 0))
             self.draw_hud()
             if self.screen is not view:
-                view.blit(pg.transform.scale(self.screen, view.get_size()), (0, 0))
+                self.blit_hud(view)
         win, rect = self.window, self.content_rect
         if rect.size != win.get_size():
             win.fill((0, 0, 0))  # letterbox bars

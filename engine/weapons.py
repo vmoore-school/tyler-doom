@@ -28,7 +28,8 @@ class Weapon:
     def prepare(self, k):
         """Build (or reuse) the sprites for render scale k (1 = the retro 320x200 view)."""
         if k not in self._sized:
-            self._sized[k] = list(self.make_frames(k))  # (idle, firing)
+            # convert_alpha: the display's own pixel format, so the big per-frame blit is fast
+            self._sized[k] = [f.convert_alpha() for f in self.make_frames(k)]  # (idle, firing)
         self.k, self.frames = k, self._sized[k]
 
     def make_frames(self, k):
