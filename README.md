@@ -62,7 +62,7 @@ Scores are stored in a free [Supabase](https://supabase.com) project. To set one
    ```sql
    create table public.scores (
      id         bigint generated always as identity primary key,
-     name       text not null check (char_length(btrim(name)) between 1 and 12),
+     name       text not null check (char_length(btrim(name)) between 1 and 12 and name = upper(name)),
      wave       int  not null check (wave between 1 and 500),
      kills      int  not null check (kills >= 0 and kills <= wave * (wave + 5) / 2 + 100),
      created_at timestamptz not null default now()

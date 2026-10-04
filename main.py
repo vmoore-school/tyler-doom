@@ -305,12 +305,12 @@ class Game:
 
     def start_name_entry(self):
         self.score_handled = True
-        self.name_entry = self.settings.get("name", "")
+        self.name_entry = clean_name(self.settings.get("name", ""))
         pg.key.start_text_input()
 
     def handle_name_entry(self, ev):
         if ev.type == pg.TEXTINPUT:
-            self.name_entry = (self.name_entry + ev.text)[:NAME_MAX]
+            self.name_entry = (self.name_entry + ev.text.upper())[:NAME_MAX]
         elif ev.type == pg.KEYDOWN:
             if ev.key == pg.K_BACKSPACE:
                 self.name_entry = self.name_entry[:-1]

@@ -34,8 +34,9 @@ window.lb_take = function (id) {
 
 
 def clean_name(name):
-    """What gets submitted: printable, trimmed, at most NAME_MAX characters."""
-    return "".join(c for c in name if c.isprintable()).strip()[:NAME_MAX]
+    """What gets submitted: printable, trimmed, ALL CAPS (so "Harry" and "HARRY" are one player),
+    at most NAME_MAX characters."""
+    return "".join(c for c in name if c.isprintable()).strip().upper()[:NAME_MAX]
 
 
 class Request:

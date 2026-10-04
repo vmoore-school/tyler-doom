@@ -263,7 +263,7 @@ class Menus:
             for i, row in enumerate(req.result):
                 y = 165 + i * 34
                 color = YELLOW if i == 0 else WHITE
-                values = (f"{i + 1}.", str(row.get("name", "?")), str(row.get("wave", 0)), str(row.get("kills", 0)))
+                values = (f"{i + 1}.", str(row.get("name", "?")).upper(), str(row.get("wave", 0)), str(row.get("kills", 0)))
                 for (x, _, anchor), value in zip(cols, values):
                     self.text(win, self.option_font, value, color, (x, y), anchor=anchor)
         rect = self.text(win, self.text_font, "> BACK <", YELLOW, (w // 2, h - 42))
