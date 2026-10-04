@@ -38,24 +38,28 @@ def shrink(src, dst):
 
 def stage():
     shutil.rmtree(STAGE, ignore_errors=True)
-    os.makedirs(os.path.join(STAGE, "assets"))
+    os.makedirs(STAGE)
     shutil.copy(os.path.join(ROOT, "main.py"), STAGE)
     shutil.copytree(os.path.join(ROOT, "engine"), os.path.join(STAGE, "engine"),
                     ignore=shutil.ignore_patterns("__pycache__"))
     before = after = 0
     renamed = {}
-    for name in sorted(os.listdir(os.path.join(ROOT, "assets"))):
-        if os.path.splitext(name)[1].lower() not in IMAGE_EXTS or name.endswith("_old.png"):
-            continue
-        new = name if name.lower().endswith(".png") else name + ".png"
-        src, dst = os.path.join(ROOT, "assets", name), os.path.join(STAGE, "assets", new)
-        shrink(src, dst)
-        if new != name:
-            renamed[name] = new
-        before += os.path.getsize(src)
-        after += os.path.getsize(dst)
+    assets = os.path.join(ROOT, "assets")
+    for folder, _, files in sorted(os.walk(assets)):
+        for f in sorted(files):
+            if os.path.splitext(f)[1].lower() not in IMAGE_EXTS:
+                continue
+            name = os.path.relpath(os.path.join(folder, f), assets).replace(os.sep, "/")  # e.g. boss/verity.png
+            new = name if name.lower().endswith(".png") else name + ".png"
+            src, dst = os.path.join(assets, name), os.path.join(STAGE, "assets", new)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shrink(src, dst)
+            if new != name:
+                renamed[name] = new
+            before += os.path.getsize(src)
+            after += os.path.getsize(dst)
     print(f"assets: {before / 1e6:.1f} MB -> {after / 1e6:.1f} MB")
-    # Point the staged code at the renamed files (only quoted filenames, e.g. "apple.gif").
+    # Point the staged code at the renamed files (only quoted paths, e.g. "other/apple.gif").
     used = set()
     for folder, _, files in os.walk(STAGE):
         for f in files:

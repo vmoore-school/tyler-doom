@@ -69,7 +69,7 @@ WALLS = {1: brick, 2: stone, 3: metal}
 
 # --- enemy sprites -------------------------------------------------------
 
-PHOTO_DIR = os.path.join(os.path.dirname(__file__), "..", "assets")
+PHOTO_DIR = os.path.join(os.path.dirname(__file__), "..", "assets")  # files are named by subfolder, e.g. "boss/verity.png"
 
 
 _photos = {}
@@ -82,15 +82,19 @@ def _photo(filename, rotate):
     return _photos[filename, rotate]
 
 
-def load_face(filename, crop, rotate=0, size=(26, 30)):
-    """Load a photo, crop (fractions x, y, w, h), and cut out an oval face."""
+def load_face(filename, crop=(0, 0, 1, 1), rotate=0, size=(26, 30)):
+    """Load a face image and fit it to `size`. Pre-cut faces (transparent background) keep their
+    own outline; plain photos are cropped (fractions x, y, w, h) and cut out as an oval."""
     img = _photo(filename, rotate)
+    cutout = img.get_flags() & pg.SRCALPHA and img.get_bounding_rect().size != img.get_size()
+    if cutout:
+        img = img.subsurface(img.get_bounding_rect())
     w, h = img.get_size()
     rect = pg.Rect(int(crop[0] * w), int(crop[1] * h), int(crop[2] * w), int(crop[3] * h))
     face = pg.transform.smoothscale(img.subsurface(rect), size)
     out = _surf(*size)
     mask = pg.Surface(size)
-    mask.fill((0, 0, 0))
+    mask.fill((255, 255, 255) if cutout else (0, 0, 0))
     pg.draw.ellipse(mask, (255, 255, 255), (0, 0, *size))
     for y in range(size[1]):
         for x in range(size[0]):
@@ -228,10 +232,10 @@ def held_sprite(filename, scale, flip=False):
 
 
 def muzzle_flash(img, pos, size):
-    """Gun sprite with flash.png behind the muzzle at `pos` (fractions of its
+    """Gun sprite with weapons/flash.png behind the muzzle at `pos` (fractions of its
     width/height). The canvas grows up and left to fit the flash, so when it's drawn anchored
     bottom-right the gun stays exactly where the idle frame is."""
-    flash = held_sprite("flash.png", 1.0)
+    flash = held_sprite("weapons/flash.png", 1.0)
     flash = pg.transform.smoothscale(flash, (size, round(size * flash.get_height() / flash.get_width())))
     fw, fh = flash.get_size()
     cx, cy = pos[0] * img.get_width(), pos[1] * img.get_height() - fh * 0.22  # just past the barrel tip
@@ -242,7 +246,7 @@ def muzzle_flash(img, pos, size):
     return out
 
 
-TYLER = ("Tyler photo 1.jpg", (0.25, 0.22, 0.5, 0.48))
+TYLER = ("enemies/Tyler_3.png",)
 
 
 # --- sounds --------------------------------------------------------------

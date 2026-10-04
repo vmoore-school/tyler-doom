@@ -164,8 +164,8 @@ class VerityVariant(Enemy):
 
     @classmethod
     def make_frames(cls):
-        base = _tint(_img("verity.png", 64), cls.add, cls.mult)
-        att = _tint(_img("verity_attack.webp", 64), cls.add, cls.mult)
+        base = _tint(_img("boss/verity.png", 64), cls.add, cls.mult)
+        att = _tint(_img("boss/verity_attack.webp", 64), cls.add, cls.mult)
         dead = pg.Surface((64, 64), pg.SRCALPHA)
         dead.blit(pg.transform.smoothscale(_tint(base, mult=(90, 90, 90)), (64, 20)), (0, 44))
         return {"walk": [base], "attack": att, "pain": _tint(base, add=(120, 120, 120)), "dead": dead}
@@ -229,8 +229,8 @@ class Verity(Enemy):
 
     @classmethod
     def make_frames(cls):
-        base = _img("verity.png", 96)
-        att = _img("verity_attack.webp", 96)
+        base = _img("boss/verity.png", 96)
+        att = _img("boss/verity_attack.webp", 96)
         dead = pg.Surface((96, 96), pg.SRCALPHA)
         dead.blit(pg.transform.smoothscale(_tint(att, mult=(120, 60, 60)), (96, 30)), (0, 66))
         return {"walk": [base], "attack": att, "pain": _tint(base, add=(120, 120, 120)),
@@ -435,7 +435,7 @@ def draw_brain_eating(screen, t, face, big_font):
     vs = 96
     vx = int(W + 10 + (cx - 15 - W - 10) * min(1.0, t))
     chomp = 1 + 0.08 * math.sin(t * 25) if 1.6 < t < 3.2 else 1
-    v_img = _img("verity_attack.webp" if t > 1.0 else "verity.png", vs)
+    v_img = _img("boss/verity_attack.webp" if t > 1.0 else "boss/verity.png", vs)
     v_img = pg.transform.smoothscale(v_img, (int(vs * chomp), int(vs / chomp)))
     vy = cy - 60
     screen.blit(v_img, (vx, vy))

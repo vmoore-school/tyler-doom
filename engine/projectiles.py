@@ -51,7 +51,7 @@ class Explosion:
 
 class Grenade:
     """Bouncing grenade. Subclass and change stats / image_file for other throwables."""
-    image_file = "grenade.png"
+    image_file = "weapons/grenade.png"
     scale = 0.35
     fuse = 1.8
     gravity = 12.0

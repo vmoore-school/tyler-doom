@@ -22,9 +22,9 @@ class Grapple:
     def __init__(self):
         load = lambda f: pg.image.load(os.path.join(PHOTO_DIR, f)).convert_alpha()
         trim = lambda img: img.subsurface(img.get_bounding_rect()).copy()
-        self.img_arm = trim(load("grapple_arm.png"))  # wrist at the top
-        self.img_open = trim(load("grapple_hand_open.png"))
-        self.img_closed = trim(load("grapple_hand_closed.png"))
+        self.img_arm = trim(load("weapons/grapple_arm.png"))  # wrist at the top
+        self.img_open = trim(load("weapons/grapple_hand_open.png"))
+        self.img_closed = trim(load("weapons/grapple_hand_closed.png"))
         self.state = "idle"
         self.hand = self.target = None
 

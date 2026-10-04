@@ -14,6 +14,7 @@ from engine.webcam import WebcamPortrait
 from engine.projectiles import Grenade, Rune
 from engine.pickups import Powerups
 from engine import boss
+from engine.menus import Menus
 
 WEB = sys.platform == "emscripten"  # running in the browser via pygbag
 
@@ -28,6 +29,7 @@ class Game:
         self.clock = pg.time.Clock()
         self.font = pg.font.Font(None, 18)
         self.big = pg.font.Font(None, 32)
+        self.mid = pg.font.Font(None, 22)
         self.bar_font = pg.font.Font(None, 26)
         self.label_font = pg.font.Font(None, 12)
         self.portrait = WebcamPortrait(size=(BAR_H - 4, BAR_H - 4))
@@ -46,8 +48,9 @@ class Game:
         for cls in SPAWN_POOL + [boss.Verity] + boss.VARIANTS:  # build sprites up front to avoid mid-game hitches
             cls.get_frames()
         self.deaths = 0
-        self.lock_mouse()
         self.reset()
+        self.menu = Menus(self)
+        self.menu.open("main")
 
     @staticmethod
     def lock_mouse():
@@ -55,6 +58,22 @@ class Game:
         pg.mouse.set_visible(False)
         if hasattr(pg.mouse, "set_relative_mode"):  # pygame-ce: real pointer lock in the browser
             pg.mouse.set_relative_mode(True)
+
+    @staticmethod
+    def unlock_mouse():
+        if hasattr(pg.mouse, "set_relative_mode"):
+            pg.mouse.set_relative_mode(False)
+        pg.event.set_grab(False)
+        pg.mouse.set_visible(True)
+
+    def quit(self):
+        self.portrait.stop()
+        pg.quit()
+        sys.exit()
+
+    def pause(self):
+        self.grapple.release()
+        self.menu.open("pause")
 
     def reset(self):
         self.world = World(LEVEL)
@@ -73,6 +92,9 @@ class Game:
         self.quiz = None
         self.backrooms_t = self.invert_t = 0.0
         self.death_t, self.dead_face, self.next_chomp = None, None, 0.0
+        self.beam_enabled = False      # the Tyler Death Beam is opt-in per round (press T)
+        self.leaderboard_valid = True  # turned off by enabling the beam; for the future leaderboard
+        self.notice, self.notice_t = None, 0.0
         self.start_wave()
 
     BOSS_EVERY = 7
@@ -89,16 +111,22 @@ class Game:
             self.world.spawn_wave(self.wave_size(), self.player)
         self.world.spawn_tree(self.player)
 
-    def skip_to_boss(self):
-        """Debug/cheat: jump straight to the next Verity wave."""
-        v = self.boss()
-        if v and v.alive:
+    def enable_beam(self):
+        if self.beam_enabled:
             return
-        self.wave = (self.wave // self.BOSS_EVERY + 1) * self.BOSS_EVERY
-        self.countdown, self.quiz = None, None
-        self.world.enemies.clear()
-        self.world.projectiles.clear()
-        self.start_wave()
+        self.beam_enabled, self.leaderboard_valid = True, False
+        self.show_notice(("TYLER DEATH BEAM ENABLED", "Leaderboard entries for this round will not be valid",
+                          "Press 3 to use it"), 4.0, warning=True)
+
+    def select_weapon(self, i):
+        w = self.weapons[i]
+        if w.cheat and not self.beam_enabled:
+            self.show_notice((f"{w.name} IS LOCKED", "Press T to enable it (disables the leaderboard)"), 2.0)
+            return
+        self.weapon = w
+
+    def show_notice(self, lines, dur, warning=False):
+        self.notice, self.notice_t, self.notice_warning = lines, dur, warning
 
     def boss(self):
         return next((e for e in self.world.enemies if isinstance(e, boss.Verity)), None)
@@ -195,23 +223,27 @@ class Game:
 
     def handle_input(self, dt):
         for ev in pg.event.get():
-            if ev.type == pg.QUIT or (ev.type == pg.KEYDOWN and ev.key == pg.K_ESCAPE and not WEB):
-                self.portrait.stop()
-                pg.quit()
-                sys.exit()
+            if ev.type == pg.QUIT:
+                self.quit()
+            if self.menu.active:
+                self.menu.handle(ev)
+                continue
             if WEB and ev.type == pg.MOUSEBUTTONDOWN:  # browsers only lock the mouse after a click (Esc unlocks)
                 self.lock_mouse()
             if ev.type == pg.KEYDOWN:
+                if ev.key in (pg.K_TAB, pg.K_ESCAPE):
+                    self.pause()
+                    return
                 if ev.key == pg.K_r and not self.player.alive:
                     self.reset()
-                elif ev.key == pg.K_p and self.player.alive:
-                    self.skip_to_boss()
+                elif ev.key == pg.K_t and self.player.alive:
+                    self.enable_beam()
                 elif self.quiz and ev.key in (pg.K_z, pg.K_x, pg.K_c):
                     self.answer_quiz((pg.K_z, pg.K_x, pg.K_c).index(ev.key))
                 elif ev.key == pg.K_SPACE and self.player.alive and self.player.z == 0:
                     self.player.vz = 4.2  # jump
                 elif pg.K_1 <= ev.key < pg.K_1 + len(self.weapons):
-                    self.weapon = self.weapons[ev.key - pg.K_1]
+                    self.select_weapon(ev.key - pg.K_1)
             if (ev.type == pg.MOUSEBUTTONDOWN and ev.button == 3) or (ev.type == pg.KEYDOWN and ev.key == pg.K_e):
                 if self.player.alive:
                     self.grapple.fire(self)
@@ -224,7 +256,7 @@ class Game:
                 self.player.angle += ev.rel[0] * MOUSE_SENS * inv
                 self.player.pitch = max(-MAX_PITCH, min(MAX_PITCH, self.player.pitch - ev.rel[1] * PITCH_SENS * inv))
         p = self.player
-        if not p.alive:
+        if not p.alive or self.menu.active:
             return
         keys = pg.key.get_pressed()
         if keys[pg.K_LEFT]:
@@ -252,6 +284,7 @@ class Game:
         self.speech_t = max(0.0, self.speech_t - dt)
         self.backrooms_t = max(0.0, self.backrooms_t - dt)
         self.invert_t = max(0.0, self.invert_t - dt)
+        self.notice_t = max(0.0, self.notice_t - dt)
         p = self.player
         p.vz -= 12.0 * dt  # jump physics
         p.z = max(0.0, p.z + p.vz * dt)
@@ -352,6 +385,25 @@ class Game:
         for i, msg in enumerate(msgs):
             img = self.big.render(msg, True, (255, 40, 40))
             scr.blit(img, img.get_rect(center=(cx, cy - 40 + i * 24)))
+        if self.notice_t > 0 and p.alive and not self.menu.active:
+            self.draw_notice()
+
+    def draw_notice(self):
+        """Boxed message in the lower middle of the view (beam warning, locked weapon)."""
+        title, *rest = self.notice
+        imgs = [self.mid.render(title, True, (255, 60, 60) if self.notice_warning else (255, 215, 0))]
+        imgs += [self.font.render(line, True, (255, 255, 255)) for line in rest]
+        box = pg.Rect(0, 0, max(i.get_width() for i in imgs) + 16, sum(i.get_height() + 2 for i in imgs) + 10)
+        box.center = (W // 2, VIEW_H - 50)
+        bg = pg.Surface(box.size, pg.SRCALPHA)
+        bg.fill((0, 0, 0, 190))
+        self.screen.blit(bg, box)
+        if self.notice_warning:
+            pg.draw.rect(self.screen, (255, 60, 60), box, 1)
+        y = box.y + 6
+        for img in imgs:
+            self.screen.blit(img, img.get_rect(midtop=(W // 2, y)))
+            y += img.get_height() + 2
 
     def draw_rune_warning(self):
         """Runes land under your feet, out of view: glow purple from the bottom of the screen
@@ -471,9 +523,12 @@ class Game:
         while True:
             dt = min(self.clock.tick(FPS) / 1000, 0.05)
             self.handle_input(dt)
-            self.update(dt)
+            if self.menu.title_screen:  # slowly look around the level behind the title
+                self.player.angle += 0.15 * dt
+            elif not self.menu.active:
+                self.update(dt)
             self.renderer.render(self.screen, self.world, self.player)
-            if self.player.alive:
+            if self.player.alive and not self.menu.title_screen:
                 bob = (math.sin(self.walk_t * 8) * 4, abs(math.cos(self.walk_t * 8)) * 4)
                 self.weapon.draw(self.screen, bob)
                 self.grapple.draw(self.screen, self, bob)
@@ -481,8 +536,11 @@ class Game:
                     k = (0.4 - self.throw_t) / 0.2
                     img = pg.transform.smoothscale(Grenade.frames()[0], (int(50 - 30 * k),) * 2)
                     self.screen.blit(img, (W // 2 + 40 - int(30 * k), VIEW_H - 40 - int(50 * k)))
-            self.draw_hud()
+            if not self.menu.title_screen:
+                self.draw_hud()
             pg.transform.scale(self.screen, self.window.get_size(), self.window)
+            if self.menu.active:
+                self.menu.draw(self.window)
             pg.display.flip()
             await asyncio.sleep(0)  # hand control back to the browser each frame
 

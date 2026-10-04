@@ -269,8 +269,8 @@ ROLES = [Brawler, Archer, Mage]
 
 class Friend(Enemy):
     """Demon body with a face cut out of a photo in the assets/ folder."""
-    photo = None
-    crop = (0, 0, 1, 1)  # face region as fractions (x, y, w, h)
+    photo = None         # path inside assets/, e.g. "enemies/Kieran.png"
+    crop = (0, 0, 1, 1)  # face region as fractions (x, y, w, h); only needed for uncut photos
     rotate = 0
     skin = (120, 60, 50)
     head_frac = 0.47
@@ -282,22 +282,22 @@ class Friend(Enemy):
 
 
 class Grinner(Friend):
-    photo, crop, rotate = "Image.jpeg", (0.25, 0.12, 0.6, 0.55), -90
+    photo = "enemies/Tyler_1.png"
     skin, speed_mult = (60, 60, 70), 1.15
 
 
 class Starer(Friend):
-    photo, crop = "Image.png", (0.15, 0.0, 0.65, 0.55)
+    photo = "enemies/Tyler_2.png"
     skin, cooldown_mult = (40, 40, 45), 0.85
 
 
 class Tyler(Friend):
-    photo, crop = "Tyler photo 1.jpg", (0.25, 0.22, 0.5, 0.48)
+    photo = "enemies/Tyler_3.png"
     skin, hp_mult = (150, 150, 155), 1.4
 
 
 class Kieran(Friend):
-    photo, crop = "w4efwfew.png", (0.08, 0.23, 0.84, 0.62)
+    photo = "enemies/Kieran.png"
     skin, radius, scale = (70, 75, 90), 0.45, 1.25
     hp_mult, speed_mult = 1.8, 0.85
 

@@ -74,7 +74,7 @@ class GoldenApple:
     @property
     def image(self):
         if GoldenApple._image is None:
-            GoldenApple._image = pg.transform.smoothscale(_load("apple.gif"), (32, 32))
+            GoldenApple._image = pg.transform.smoothscale(_load("other/apple.gif"), (32, 32))
         return GoldenApple._image
 
     def update(self, dt, game):
@@ -117,7 +117,7 @@ class TreeOfLife:
         for cx, cy in ((12, 30), (52, 22), (20, 6), (46, 34), (8, 20)):
             pg.draw.circle(s, (240, 200, 60), (cx, cy), 2)
         # Al Gore, cut out of his dark backdrop, nestled in the canopy.
-        gore = _load("al gore.png")
+        gore = _load("other/al gore.png")
         w, h = gore.get_size()
         gore = pg.transform.smoothscale(gore.subsurface((int(w * 0.27), int(h * 0.08), int(w * 0.48), int(h * 0.87))), (26, 26))
         bg = gore.get_at((0, 0))

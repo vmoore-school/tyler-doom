@@ -20,7 +20,7 @@ pip install pygbag
 python tools/build_web.py --serve   # build and open http://localhost:8000
 ```
 
-`tools/build_web.py` copies the game into `build/pygbag`, shrinks the photos there (37 MB -> ~2 MB; `assets/` itself is untouched), and builds `build/pygbag/build/web`, a static site. Click the page once to start (browsers need a click before they allow sound and mouse lock); Esc releases the mouse. No webcam in the browser, so the face is a placeholder.
+`tools/build_web.py` copies the game into `build/pygbag`, shrinks the photos there (37 MB -> ~2 MB; `assets/` itself is untouched), and builds `build/pygbag/build/web`, a static site. Click the page once to start (browsers need a click before they allow sound and mouse lock); Esc releases the mouse, Tab pauses. No webcam in the browser, so the face is a placeholder.
 
 To publish on GitHub Pages: Settings -> Pages -> Source: GitHub Actions, then run the "Deploy web build" workflow from the Actions tab.
 
@@ -31,14 +31,14 @@ To publish on GitHub Pages: Settings -> Pages -> Source: GitHub Actions, then ru
 | WASD / arrows | Move / turn |
 | Mouse | Look (left/right and up/down) |
 | Left click | Fire |
-| 1 / 2 / 3 | Pistol / Shotgun / Tyler Death Beam |
+| 1 / 2 / 3 | Pistol / Shotgun / Tyler Death Beam (after pressing T) |
+| T | Enable the Tyler Death Beam for this round (leaderboard entries for the round won't count) |
 | Space | Jump |
 | Right click / E (hold) | Grapple |
 | Middle click / G | Throw David grenade |
 | Z / X / C | Answer Verity's quiz |
-| P | Skip to the next Verity fight |
 | R | Restart after dying |
-| Esc | Quit (in the browser: release the mouse) |
+| Tab / Esc | Pause menu |
 
 ## Gameplay
 
@@ -58,6 +58,7 @@ To publish on GitHub Pages: Settings -> Pages -> Source: GitHub Actions, then ru
 | File | Contents |
 |---|---|
 | `main.py` | Game loop, input, HUD, waves |
+| `engine/menus.py` | Main menu, pause menu, help screens |
 | `engine/render.py` | Raycaster for walls and sprites |
 | `engine/world.py` | Map (`LEVEL`), collision, pathfinding, spawning |
 | `engine/entities.py` | Player, `Enemy` base class, roles (`ROLES`), faces (`FACES`), `SPAWN_POOL` |

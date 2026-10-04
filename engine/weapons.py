@@ -17,6 +17,7 @@ class Weapon:
     pierce = False       # hit every enemy along the ray, not just the nearest
     margin = 0           # gap between the weapon and the right edge of the screen
     drop = 8             # pixels hidden below the bottom of the view
+    cheat = False        # locked until the player opts in (and loses leaderboard eligibility)
 
     def __init__(self):
         self.timer = 0.0
@@ -61,7 +62,7 @@ class Pistol(Weapon):
     name, damage, cooldown, ammo = "PISTOL", 15, 0.35, 60
 
     def make_frames(self):
-        img = assets.held_sprite("pistol.png", 0.33)
+        img = assets.held_sprite("weapons/pistol.png", 0.33)
         return img, assets.muzzle_flash(img, (0.36, 0.02), 30)
 
 
@@ -70,14 +71,14 @@ class Shotgun(Weapon):
     pellets, spread, sound = 7, 0.07, "shotgun"
 
     def make_frames(self):
-        img = assets.held_sprite("Shotgun.webp", 0.6)
+        img = assets.held_sprite("weapons/Shotgun.webp", 0.6)
         return img, assets.muzzle_flash(img, (0.27, 0.03), 44)
 
 
 class TylerBeam(Weapon):
     """Continuous piercing beam made of tiled Tyler faces, fired from an open purple palm."""
     name, damage, cooldown, ammo = "TYLER DEATH BEAM", 60, 0.08, 999
-    pierce, sound = True, "beam"
+    pierce, sound, cheat = True, "beam", True
     margin, drop = 6, 4
     palm = (0.5, 0.6)  # beam origin as a fraction of the open hand
 
@@ -90,7 +91,7 @@ class TylerBeam(Weapon):
         # Left-hand photos: mirror them into a right hand and turn them purple. Same scale for
         # both so the hand doesn't change size when it opens.
         closed, open_ = (assets.hue_shift(assets.held_sprite(f, 0.4, flip=True), 255, sat=1.6)
-                         for f in ("grapple_hand_closed.png", "grapple_hand_open.png"))
+                         for f in ("weapons/grapple_hand_closed.png", "weapons/grapple_hand_open.png"))
         return closed, open_
 
     def fire(self, game):
