@@ -50,6 +50,8 @@ class Game:
             "explosion": assets.noise_sound(0.7, 1.0, 1.5, 5),
             "powerup": assets.noise_sound(0.25, 0.25, 0.3, 6),
             "chomp": assets.noise_sound(0.12, 0.6, 4, 7),
+            "rifle": assets.noise_sound(0.1, 0.4, 3, 8),
+            "reload": assets.load_sound("weapons/Reload.opus", skip=0.33),  # starts after 0.37s of silence
         }
         Grenade.frames()
         self.grenade_icon = pg.transform.smoothscale(Grenade.frames()[0], (14, 14))
@@ -150,10 +152,13 @@ class Game:
     def reset(self):
         self.world = World(LEVEL)
         self.player = Player(*self.world.start)
+        for w in getattr(self, "weapons", []):
+            w.stop_reload()  # don't leave a reload sound playing into the new round
         self.weapons = [w() for w in WEAPON_TYPES]
         for w in self.weapons:
             w.prepare(self.k)
         self.weapon = self.weapons[0]
+        self.prev_weapon = self.weapon  # where T switches back to from the beam
         self.grapple = Grapple()
         self.walk_t = 0.0
         self.headshot_flash = 0.0
@@ -188,19 +193,44 @@ class Game:
         else:
             self.world.spawn_wave(self.wave_size(), self.player)
         self.world.spawn_tree(self.player)
+        for i, w in enumerate(self.gun_slots()):
+            if w.unlock_wave == self.wave and self.wave > 1:
+                self.show_notice((f"{w.name} UNLOCKED", f"Press {i + 1} to use it"), 4.0)
 
-    def enable_beam(self):
-        if self.beam_enabled:
+    def gun_slots(self):
+        """The weapons on the number keys, in order (cheat weapons have their own key)."""
+        return [w for w in self.weapons if not w.cheat]
+
+    def toggle_beam(self):
+        """T: switch to the Tyler Death Beam (enabling it the first time, which voids the
+        leaderboard for this round), or back to the previous weapon."""
+        beam = next(w for w in self.weapons if w.cheat)
+        if self.weapon is beam:
+            self.switch_to(self.prev_weapon)
             return
-        self.beam_enabled, self.leaderboard_valid = True, False
-        self.show_notice(("TYLER DEATH BEAM ENABLED", "Leaderboard entries for this round will not be valid",
-                          "Press 3 to use it"), 4.0, warning=True)
+        if not self.beam_enabled:
+            self.beam_enabled, self.leaderboard_valid = True, False
+            self.show_notice(("TYLER DEATH BEAM ENABLED", "Leaderboard entries for this round will not be valid",
+                              "Press T again to switch back"), 4.0, warning=True)
+        self.switch_to(beam)
 
     def select_weapon(self, i):
-        w = self.weapons[i]
-        if w.cheat and not self.beam_enabled:
-            self.show_notice((f"{w.name} IS LOCKED", "Press T to enable it (disables the leaderboard)"), 2.0)
+        """Number key i: a gun, if it's unlocked by this wave."""
+        slots = self.gun_slots()
+        if i >= len(slots):
             return
+        w = slots[i]
+        if self.wave < w.unlock_wave:
+            self.show_notice((f"{w.name} IS LOCKED", f"Unlocks at wave {w.unlock_wave}"), 2.0)
+            return
+        self.switch_to(w)
+
+    def switch_to(self, w):
+        if w is self.weapon:
+            return
+        self.weapon.stop_reload()  # a cancelled reload keeps the clip as it was
+        if not self.weapon.cheat:
+            self.prev_weapon = self.weapon
         self.weapon = w
 
     def show_notice(self, lines, dur, warning=False):
@@ -258,8 +288,7 @@ class Game:
 
     def play(self, name):
         snd = self.sounds.get(name)
-        if snd:
-            snd.play()
+        return snd.play() if snd else None
 
     def hitscan(self, angle_offset, damage, pierce=False):
         """Fire a ray from the player; damage the nearest enemy in front of the wall
@@ -347,20 +376,22 @@ class Game:
                     return
                 if ev.key == pg.K_r and not self.player.alive:
                     self.reset()
+                elif ev.key == pg.K_r and self.player.alive:
+                    self.weapon.reload(self)
                 elif ev.key == pg.K_t and self.player.alive:
-                    self.enable_beam()
+                    self.toggle_beam()
                 elif self.quiz and ev.key in (pg.K_z, pg.K_x, pg.K_c):
                     self.answer_quiz((pg.K_z, pg.K_x, pg.K_c).index(ev.key))
                 elif ev.key == pg.K_SPACE and self.player.alive and self.player.z == 0:
                     self.player.vz = 4.2  # jump
-                elif pg.K_1 <= ev.key < pg.K_1 + len(self.weapons):
+                elif pg.K_1 <= ev.key <= pg.K_9:
                     self.select_weapon(ev.key - pg.K_1)
             if (ev.type == pg.MOUSEBUTTONDOWN and ev.button == 3) or (ev.type == pg.KEYDOWN and ev.key == pg.K_e):
                 if self.player.alive:
                     self.grapple.fire(self)
             if (ev.type == pg.MOUSEBUTTONUP and ev.button == 3) or (ev.type == pg.KEYUP and ev.key == pg.K_e):
                 self.grapple.release()
-            if (ev.type == pg.MOUSEBUTTONDOWN and ev.button == 2) or (ev.type == pg.KEYDOWN and ev.key == pg.K_g):
+            if (ev.type == pg.MOUSEBUTTONDOWN and ev.button == 2) or (ev.type == pg.KEYDOWN and ev.key in (pg.K_g, pg.K_q)):
                 self.throw_grenade()
             if ev.type == pg.MOUSEMOTION:
                 inv = -1 if self.invert_t > 0 else 1  # Falsity lies to your mouse
@@ -653,7 +684,9 @@ class Game:
         face_w = BAR_H - 4
         face_x = W // 2 - face_w // 2
         boxes = [  # (x, width, value, label)
-            (2, 66, self.weapon.ammo, self.weapon.name),
+            (2, 66, "RELOAD" if self.weapon.reloading else f"{self.weapon.in_clip}/{self.weapon.clip}",
+             self.weapon.name if self.label_font.size(self.weapon.name)[0] <= 62
+             else self.weapon.short_name or self.weapon.name),
             (70, 66, f"{p.health}%", "HEALTH"),
             (face_x + face_w + 4, 70, self.wave, "WAVE"),
             (face_x + face_w + 76, 70, left, "LEFT"),
@@ -661,9 +694,10 @@ class Game:
         for x, w, value, label in boxes:
             pg.draw.rect(scr, (45, 45, 45), (x, top + 2, w, BAR_H - 4))
             pg.draw.rect(scr, (100, 100, 100), (x, top + 2, w, BAR_H - 4), 1)
-            img = self.bar_font.render(str(value), True, (200, 30, 30))
+            font = next((f for f in (self.bar_font, self.mid, self.font) if f.size(str(value))[0] <= w - 4), self.font)
+            img = font.render(str(value), True, (200, 30, 30))
             scr.blit(img, img.get_rect(center=(x + w // 2, top + 13)))
-            img = self.label_font.render(label[:12], True, (200, 200, 200))
+            img = self.label_font.render(label[:14], True, (200, 200, 200))
             scr.blit(img, img.get_rect(center=(x + w // 2, top + BAR_H - 7)))
         face = self.portrait.render(p.health, p.hurt_flash, not p.alive)
         pg.draw.rect(scr, (20, 20, 20), (face_x - 2, top + 1, face_w + 4, BAR_H - 2))

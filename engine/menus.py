@@ -15,20 +15,20 @@ CONTROLS = [
     ("WASD / arrows", "Move / turn"),
     ("Mouse", "Look around"),
     ("Left click", "Fire"),
-    ("1 / 2", "Pistol / shotgun"),
-    ("3", "Tyler Death Beam (press T first to enable it)"),
-    ("T", "Enable the Tyler Death Beam. Leaderboard entries for that round won't count"),
+    ("1 / 2 / 3", "Pistol / shotgun (from wave 7) / assault rifle (from wave 21)"),
+    ("R", "Reload (or restart after dying)"),
+    ("T", "Tyler Death Beam on / off. Using it means that round's leaderboard entry won't count"),
     ("Space", "Jump"),
     ("Right click / E (hold)", "Grapple"),
-    ("Middle click / G", "Throw a David grenade"),
+    ("Middle click / G / Q", "Throw a David grenade"),
     ("Z / X / C", "Answer Verity's pop quiz"),
     ("Tab / Esc", "Pause (settings are in the pause and main menus)"),
-    ("R", "Restart after dying"),
 ]
 
 HOW_TO_PLAY = [
     "Survive waves of your friends. Each wave has one more enemy than the last. "
-    "Clearing a wave refills your health, ammo and grenades.",
+    "Clearing a wave refills your health and grenades and reloads your guns. "
+    "Ammo is unlimited, but every gun has to reload when its clip runs out.",
     "Every enemy shows its attack before it lands. Dodge it:",
     "  Brawler (sword): raises the sword, then swings. Back off. It's a bit slower than you.",
     "  Archer (bow): glints, then shoots where you are. Strafe or jump the arrow.",

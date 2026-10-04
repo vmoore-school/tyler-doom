@@ -31,13 +31,13 @@ To publish on GitHub Pages: Settings -> Pages -> Source: GitHub Actions, then ru
 | WASD / arrows | Move / turn |
 | Mouse | Look (left/right and up/down) |
 | Left click | Fire |
-| 1 / 2 / 3 | Pistol / Shotgun / Tyler Death Beam (after pressing T) |
-| T | Enable the Tyler Death Beam for this round (leaderboard entries for the round won't count) |
+| 1 / 2 / 3 | Pistol / Shotgun (unlocks at wave 7) / Assault rifle (unlocks at wave 21) |
+| R | Reload (restart after dying) |
+| T | Tyler Death Beam on/off (using it means the round's leaderboard entry won't count) |
 | Space | Jump |
 | Right click / E (hold) | Grapple |
-| Middle click / G | Throw David grenade |
+| Middle click / G / Q | Throw David grenade |
 | Z / X / C | Answer Verity's quiz |
-| R | Restart after dying |
 | Tab / Esc | Pause menu |
 
 ## Settings
@@ -117,4 +117,4 @@ the dashboard.
 | `engine/settings.py` | Resolution, FOV, sensitivity, etc. |
 | `tools/build_web.py` | Browser build (pygbag) |
 
-Waves spawn every face combined with every role. To add a fighting style, subclass `Enemy` (set `weapon`, override `think()` for movement and `perform_attack()` for the attack) and add it to `ROLES`. To add a friend, subclass `Friend` with a photo and crop and add it to `FACES`. To add a gun, subclass `Weapon` and add it to `WEAPON_TYPES`.
+Waves spawn every face combined with every role. To add a fighting style, subclass `Enemy` (set `weapon`, override `think()` for movement and `perform_attack()` for the attack) and add it to `ROLES`. To add a friend, subclass `Friend` with a photo and crop and add it to `FACES`. To add a gun, subclass `Weapon` (set `clip`, `reload_time` and `unlock_wave`) and add it to `WEAPON_TYPES`.

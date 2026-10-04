@@ -19,6 +19,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STAGE = os.path.join(ROOT, "build", "pygbag")
 MAX_SIDE = 512  # plenty for face crops; held weapons are drawn ~110px tall
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+SOUND_EXTS = {".opus", ".ogg", ".mp3", ".flac", ".wav"}  # all become .ogg
 
 
 def shrink(src, dst):
@@ -36,6 +37,15 @@ def shrink(src, dst):
         shutil.copy(src, dst)  # already a small PNG
 
 
+def to_ogg(src, dst):
+    """Re-encode a sound as Ogg Vorbis, the format pygbag requires for the browser (it rejects opus
+    and wav). Needs ffmpeg on the PATH (the Pages workflow installs it)."""
+    if not shutil.which("ffmpeg"):
+        sys.exit("ffmpeg is needed to convert sounds for the web build (e.g. sudo apt install ffmpeg)")
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", src, "-vn", "-ac", "1",
+                    "-c:a", "libvorbis", "-q:a", "4", dst], check=True)
+
+
 def stage():
     shutil.rmtree(STAGE, ignore_errors=True)
     os.makedirs(STAGE)
@@ -47,13 +57,17 @@ def stage():
     assets = os.path.join(ROOT, "assets")
     for folder, _, files in sorted(os.walk(assets)):
         for f in sorted(files):
-            if os.path.splitext(f)[1].lower() not in IMAGE_EXTS:
+            ext = os.path.splitext(f)[1].lower()
+            if ext not in IMAGE_EXTS | SOUND_EXTS:
                 continue
             name = os.path.relpath(os.path.join(folder, f), assets).replace(os.sep, "/")  # e.g. boss/verity.png
-            new = name if name.lower().endswith(".png") else name + ".png"
+            if ext in SOUND_EXTS:
+                new = name if ext == ".ogg" else name + ".ogg"
+            else:
+                new = name if ext == ".png" else name + ".png"
             src, dst = os.path.join(assets, name), os.path.join(STAGE, "assets", new)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shrink(src, dst)
+            (to_ogg if ext in SOUND_EXTS else shrink)(src, dst)
             if new != name:
                 renamed[name] = new
             before += os.path.getsize(src)

@@ -6,13 +6,18 @@ from .settings import W, VIEW_H
 
 
 class Weapon:
-    """Hitscan weapon base. Subclass and set stats / frames to add new guns."""
+    """Hitscan weapon base. Subclass and set stats / frames to add new guns.
+    Ammo is unlimited; the cost is reloading: firing uses up the clip, and an empty clip (or R)
+    starts a reload that takes `reload_time`, during which the gun dips out of view."""
     name = "weapon"
+    short_name = None    # for the status bar when the name doesn't fit
     damage = 10
     cooldown = 0.4
     pellets = 1
     spread = 0.0         # radians, random per pellet
-    ammo = 50
+    clip = 12            # shots per reload
+    reload_time = 1.5    # seconds
+    unlock_wave = 1      # first wave you can use it (cheat weapons ignore this: see Game.select_weapon)
     sound = "pistol"
     pierce = False       # hit every enemy along the ray, not just the nearest
     margin = 0           # gap between the weapon and the right edge of the screen
@@ -22,6 +27,9 @@ class Weapon:
     def __init__(self):
         self.timer = 0.0
         self.flash = 0.0
+        self.in_clip = self.clip
+        self.reload_t = 0.0  # time left on the current reload (0 = not reloading)
+        self.channel = None  # reload sound, so it can be cut off when the reload ends
         self._sized = {}
         self.prepare(1)
 
@@ -35,30 +43,66 @@ class Weapon:
     def make_frames(self, k):
         raise NotImplementedError
 
+    @property
+    def reloading(self):
+        return self.reload_t > 0
+
+    def reload(self, game):
+        if self.reloading or self.in_clip >= self.clip:
+            return
+        self.reload_t = self.reload_time
+        self.flash = 0.0
+        self.channel = game.play("reload")
+
     def refill(self):
-        self.ammo = type(self).ammo
+        """Instantly full clip (between waves)."""
+        self.stop_reload()
+        self.in_clip = self.clip
+
+    def stop_reload(self):
+        """Cancel a reload (switching weapons). The clip stays as it was."""
+        self.reload_t = 0.0
+        if self.channel:
+            self.channel.fadeout(80)
+            self.channel = None
 
     def update(self, dt):
         self.timer = max(0.0, self.timer - dt)
         self.flash = max(0.0, self.flash - dt)
+        if self.reloading:
+            self.reload_t -= dt
+            if self.reload_t <= 0:
+                self.stop_reload()  # the sound is longer than most reloads: cut it off
+                self.in_clip = self.clip
 
     def fire(self, game):
-        if self.timer > 0 or self.ammo <= 0:
+        if self.timer > 0 or self.reloading:
+            return False
+        if self.in_clip <= 0:
+            self.reload(game)
             return False
         if not game.powerups.active("INFINITE AMMO"):
-            self.ammo -= 1
+            self.in_clip -= 1
         self.timer = self.cooldown / game.powerups.fire_rate
         self.flash = 0.08
         for _ in range(self.pellets):
             game.hitscan(random.uniform(-self.spread, self.spread), self.damage * game.powerups.damage_mult, self.pierce)
         game.play(self.sound)
+        if self.in_clip <= 0:
+            self.reload(game)
         return True
+
+    def reload_dip(self):
+        """How far the gun has dipped out of view for the reload, 0..1 (down, then back up)."""
+        if not self.reloading:
+            return 0.0
+        return math.sin(math.pi * (1 - self.reload_t / self.reload_time)) ** 0.5
 
     def draw(self, screen, bob):
         img = self.frames[1 if self.flash > 0 else 0]
         recoil = int(self.timer / self.cooldown * 10 * self.k) if self.cooldown else 0
         x, y = self.pos(img, bob)
-        screen.blit(img, (x, y + recoil))
+        screen.blit(img, (x, y + recoil + int(self.reload_dip() * img.get_height() * 0.7)))
 
     def pos(self, img, bob):
         """Top-left of the held weapon: anchored to the bottom-right corner of the view."""
@@ -68,7 +112,8 @@ class Weapon:
 
 
 class Pistol(Weapon):
-    name, damage, cooldown, ammo = "PISTOL", 15, 0.35, 60
+    name, damage, cooldown = "PISTOL", 15, 0.35
+    clip, reload_time = 12, 1.3
 
     def make_frames(self, k):
         img = assets.held_sprite("weapons/pistol.png", 0.33 * k)
@@ -76,18 +121,32 @@ class Pistol(Weapon):
 
 
 class Shotgun(Weapon):
-    name, damage, cooldown, ammo = "SHOTGUN", 10, 0.9, 20
+    name, damage, cooldown = "SHOTGUN", 10, 0.9
     pellets, spread, sound = 7, 0.07, "shotgun"
+    clip, reload_time, unlock_wave = 6, 2.2, 7
 
     def make_frames(self, k):
         img = assets.held_sprite("weapons/Shotgun.webp", 0.6 * k)
         return img, assets.muzzle_flash(img, (0.27, 0.03), round(44 * k))
 
 
+class AssaultRifle(Weapon):
+    """Fast full-auto with a little spread."""
+    name, damage, cooldown = "ASSAULT RIFLE", 12, 0.1
+    spread, sound = 0.02, "rifle"
+    clip, reload_time, unlock_wave = 30, 2.0, 21
+
+    def make_frames(self, k):
+        img = assets.held_sprite("weapons/AssaultRifle.png", 0.3 * k)
+        return img, assets.muzzle_flash(img, (0.06, 0.18), round(34 * k))
+
+
 class TylerBeam(Weapon):
     """Continuous piercing beam made of tiled Tyler faces, fired from an open purple palm."""
-    name, damage, cooldown, ammo = "TYLER DEATH BEAM", 60, 0.08, 999
+    name, damage, cooldown = "TYLER DEATH BEAM", 60, 0.08
+    short_name = "TYLER BEAM"
     pierce, sound, cheat = True, "beam", True
+    clip, reload_time = 100, 2.5
     margin, drop = 6, 4
     palm = (0.5, 0.6)  # beam origin as a fraction of the open hand
     _purple = None     # full-size purple hands, shared by every render scale
@@ -108,7 +167,7 @@ class TylerBeam(Weapon):
                 for img in TylerBeam._purple]
 
     def fire(self, game):
-        if super().fire(game):
+        if super().fire(game) and not self.reloading:
             self.flash = self.cooldown + 0.02  # keep beam visible while held
 
     def update(self, dt):
@@ -136,5 +195,6 @@ class TylerBeam(Weapon):
         super().draw(screen, bob)
 
 
-# Order = number key bindings (1, 2, ...). Register new weapons here.
-WEAPON_TYPES = [Pistol, Shotgun, TylerBeam]
+# Register new weapons here. Number keys (1, 2, ...) go to the non-cheat weapons in this order;
+# cheat weapons have their own key (T for the Tyler Death Beam).
+WEAPON_TYPES = [Pistol, Shotgun, AssaultRifle, TylerBeam]

@@ -24,6 +24,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg  # converts sounds to ogg for the browser
       - run: pip install pygame pygbag==0.9.3
       - run: python tools/build_web.py
       - uses: actions/upload-pages-artifact@v3

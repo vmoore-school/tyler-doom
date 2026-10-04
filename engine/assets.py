@@ -251,6 +251,24 @@ TYLER = ("enemies/Tyler_3.png",)
 
 # --- sounds --------------------------------------------------------------
 
+def load_sound(filename, skip=0.0):
+    """A sound file from assets/ (path inside it), minus `skip` seconds of lead-in.
+    Returns None if the mixer is unavailable or the file can't be read."""
+    if not pg.mixer.get_init():
+        return None
+    try:
+        snd = pg.mixer.Sound(os.path.join(PHOTO_DIR, filename))
+    except (pg.error, FileNotFoundError) as e:
+        print("couldn't load sound", filename, e)
+        return None
+    if skip:
+        freq, size, chans = pg.mixer.get_init()
+        frame = abs(size) // 8 * chans
+        raw = snd.get_raw()
+        snd = pg.mixer.Sound(buffer=raw[int(skip * freq) * frame:])
+    return snd
+
+
 def noise_sound(dur, vol, decay, seed=0):
     """Decaying white-noise burst. Returns None if the mixer is unavailable."""
     if not pg.mixer.get_init():
