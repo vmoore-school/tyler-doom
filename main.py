@@ -29,7 +29,7 @@ class Game:
     def __init__(self):
         pg.mixer.pre_init(22050, -16, 1, 256)
         pg.init()
-        pg.display.set_caption("Doom-ish")
+        pg.display.set_caption("TYLER DOOM")
         self.settings = self.load_settings()
         self.clock = pg.time.Clock()
         self.font = pg.font.Font(None, 18)

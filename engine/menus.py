@@ -1,8 +1,10 @@
 """Main menu, pause menu, settings and help screens. Drawn straight onto the window (not the
 low-res game surface) so text stays sharp at any window size: layout is written for a 960x600
 canvas and scaled. Keyboard (W/S or arrows, Enter) and mouse both work."""
+import os
 import sys
 import pygame as pg
+from .assets import PHOTO_DIR
 from .settings import RESOLUTIONS
 
 WEB = sys.platform == "emscripten"
@@ -64,6 +66,7 @@ class Menus:
         self.game = game
         self.current = None  # "main", "pause", "help", "settings", "leaderboard" or None while playing
         self.board = None    # leaderboard Request being shown
+        self._logo = None    # (scale, surface) cache of the main menu logo
         self.back_to = None  # where help / settings return to
         self.sel = 0
         self.page = 0
@@ -200,26 +203,41 @@ class Menus:
             self.draw_leaderboard(win)
             return
         cx = self.LW // 2
-        heading = {"main": "DOOM-ISH", "pause": "PAUSED", "settings": "SETTINGS"}[self.current]
-        sub = {"main": "Wave survival against your friends", "pause": f"Wave {self.game.wave}",
-               "settings": "Enter / click or A/D to change"}[self.current]
-        self.text(win, self.title_font, heading, RED, (cx, 130), shadow=True)
-        self.text(win, self.text_font, sub, GREY, (cx, 190))
+        top = 255  # first menu item
+        if self.current == "main":
+            logo = self.logo()
+            win.blit(logo, logo.get_rect(center=(round(cx * self.m), round(122 * self.m))))
+            self.text(win, self.text_font, "Wave survival against your friends", GREY, (cx, 232))
+            top = 285
+        else:
+            heading = {"pause": "PAUSED", "settings": "SETTINGS"}[self.current]
+            sub = {"pause": f"Wave {self.game.wave}", "settings": "Enter / click or A/D to change"}[self.current]
+            self.text(win, self.title_font, heading, RED, (cx, 130), shadow=True)
+            self.text(win, self.text_font, sub, GREY, (cx, 190))
         font = self.item_font if self.current != "settings" else self.option_font
         gap = 50 if len(self.items()) <= 5 else 42
         for i, (label, action) in enumerate(self.items()):
             selected = i == self.sel
             rect = self.text(win, font, f"> {label} <" if selected else label,
-                             YELLOW if selected else WHITE, (cx, 255 + i * gap))
+                             YELLOW if selected else WHITE, (cx, top + i * gap))
             self.buttons.append((rect.inflate(round(60 * self.m), round(12 * self.m)), action))
         if self.current == "settings":
             note = "Higher resolutions look sharper but run slower (the HUD stays pixel art)"
-            self.text(win, self.small_font, note, GREY, (cx, 255 + len(self.items()) * gap + 10))
+            self.text(win, self.small_font, note, GREY, (cx, top + len(self.items()) * gap + 10))
         hint = "W/S or mouse to choose, Enter or click to select"
         if self.current == "pause":  # sits above the status bar
             self.text(win, self.small_font, hint + ",  Tab to resume", GREY, (cx, 482))
         else:
             self.text(win, self.small_font, hint, GREY, (cx, self.LH - 30))
+
+    def logo(self):
+        """assets/other/logo.png, trimmed and scaled up ~3x with hard pixel edges (it's pixel-sized art)."""
+        if self._logo is None or self._logo[0] != self.m:
+            img = pg.image.load(os.path.join(PHOTO_DIR, "other/logo.png")).convert_alpha()
+            img = img.subsurface(img.get_bounding_rect())
+            k = 190 * self.m / img.get_height()  # 190 logical pixels tall
+            self._logo = (self.m, pg.transform.scale(img, (round(img.get_width() * k), round(img.get_height() * k))))
+        return self._logo[1]
 
     def draw_leaderboard(self, win):
         w, h, m = self.LW, self.LH, self.m

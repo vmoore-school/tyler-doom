@@ -78,7 +78,7 @@ def stage():
 def main():
     pg.init()
     stage()
-    args = [sys.executable, "-m", "pygbag", "--title", "Doom-ish", "--no_opt"]
+    args = [sys.executable, "-m", "pygbag", "--title", "TYLER DOOM", "--no_opt"]
     if "--serve" not in sys.argv:
         args.append("--build")
     args.append(STAGE)
