@@ -1,9 +1,14 @@
 """Doom-style status bar portrait fed by the webcam (pygame.camera).
 Falls back to a placeholder if no camera is available."""
 import math
+import sys
 import threading
 import pygame as pg
-import pygame.camera
+
+try:
+    import pygame.camera
+except ImportError:  # e.g. the browser build: fall back to the placeholder face
+    pygame.camera = None
 
 
 class WebcamPortrait:
@@ -12,6 +17,8 @@ class WebcamPortrait:
         self.frame = self.big_frame = None
         self.cam = None
         self.running = False
+        if pygame.camera is None or sys.platform == "emscripten":
+            return
         try:
             pygame.camera.init()
             devices = pygame.camera.list_cameras()

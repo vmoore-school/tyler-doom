@@ -109,10 +109,11 @@ class Missile:
     """Boss projectile. Hits the player in flight, or splashes on landing if `splash` > 0."""
 
     def __init__(self, x, y, z, vx, vy, vz, kind, damage, scale=0.5, gravity=0.0, homing=0.0,
-                 life=6.0, splash=0.0, spin=True):
+                 life=6.0, splash=0.0, spin=True, source=None):
         self.x, self.y, self.z, self.vx, self.vy, self.vz = x, y, z, vx, vy, vz
         self.kind, self.damage, self.scale = kind, damage, scale
         self.gravity, self.homing, self.life, self.splash, self.spin = gravity, homing, life, splash, spin
+        self.source = source  # who threw it, for the death screen
         self.t = 0.0
         self.dead = False
 
@@ -144,11 +145,11 @@ class Missile:
         if self.z <= 0:
             self.dead = True
             if self.splash and d < self.splash and p.z < 0.3:  # jump to dodge!
-                p.hurt(self.damage)
+                p.hurt(self.damage, self.source)
                 game.play("hurt")
             return
         if p.alive and d < 0.45 and p.z - 0.1 < self.z < p.z + 1.0:
-            p.hurt(self.damage)
+            p.hurt(self.damage, self.source)
             game.play("hurt")
             self.dead = True
 
@@ -188,7 +189,7 @@ class Falsity(VerityVariant):
 class Cruelty(VerityVariant):
     """Red. Fast and violent."""
     add, mult, title = (0, 0, 0), (255, 50, 40), "Cruelty"
-    speed, damage, attack_range, attack_cooldown, accuracy = 3.4, 18, 1.6, 0.9, 0.85
+    speed, damage, attack_range, attack_cooldown = 3.4, 18, 1.6, 0.9
 
 
 class Lovity(VerityVariant):
@@ -321,7 +322,7 @@ class Verity(Enemy):
             t = max(0.3, dist / speed)
             game.world.projectiles.append(Missile(
                 self.x, self.y, z0, math.cos(a) * speed, math.sin(a) * speed, (0.5 * g * t * t - z0) / t,
-                "eiffel", int(18 * self.power), scale=0.9, gravity=g, splash=1.0))
+                "eiffel", int(18 * self.power), scale=0.9, gravity=g, splash=1.0, source=self))
 
     def attack_baguettes(self, game):
         """France: baguettes rain from the sky around you. Jump or run!"""
@@ -332,7 +333,7 @@ class Verity(Enemy):
             if not game.world.tile(int(x), int(y)):
                 game.world.projectiles.append(Missile(
                     x, y, random.uniform(1.6, 1.9), 0, 0, 0, "baguette", int(14 * self.power),
-                    scale=0.6, gravity=4.0, splash=0.8))  # drop from just under the wall tops
+                    scale=0.6, gravity=4.0, splash=0.8, source=self))  # drop from just under the wall tops
 
     def attack_eras(self, game):
         """Taylor Swift's age: a ring of exactly that many music notes."""
@@ -342,7 +343,7 @@ class Verity(Enemy):
             a = i / age * 2 * math.pi + self.anim
             game.world.projectiles.append(Missile(
                 self.x, self.y, 0.5, math.cos(a) * 3.5, math.sin(a) * 3.5, 0, "note",
-                int(6 * self.power), scale=0.35, spin=False, life=8))
+                int(6 * self.power), scale=0.35, spin=False, life=8, source=self))
 
     def attack_encyclopedia(self, game):
         """Knowledge: homing encyclopedias, while reciting things he shouldn't know."""
@@ -352,7 +353,7 @@ class Verity(Enemy):
             a = ang + random.uniform(-1.2, 1.2)
             game.world.projectiles.append(Missile(
                 self.x, self.y, 0.8, math.cos(a) * 3.2, math.sin(a) * 3.2, 0, "book",
-                int(12 * self.power), scale=0.45, homing=1.8, life=7, spin=False))
+                int(12 * self.power), scale=0.45, homing=1.8, life=7, spin=False, source=self))
 
     def attack_quiz(self, game):
         """Knowledge: pop quiz. Right answer stuns him, wrong answer hurts."""

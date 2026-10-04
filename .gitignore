@@ -1,2 +1,39 @@
+# Python
 __pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
 .venv/
+venv/
+env/
+
+# Build output (web build from tools/build_web.py)
+build/
+dist/
+
+# Secrets / local config
+.env
+.env.*
+
+# Editors and IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS clutter
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Claude Code: local settings and exported conversation transcripts
+.claude/settings.local.json
+20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]-*.txt

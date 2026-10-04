@@ -72,9 +72,19 @@ WALLS = {1: brick, 2: stone, 3: metal}
 PHOTO_DIR = os.path.join(os.path.dirname(__file__), "..", "assets")
 
 
+_photos = {}
+
+
+def _photo(filename, rotate):
+    """Load (and rotate) a photo once; several enemy classes share each face."""
+    if (filename, rotate) not in _photos:
+        _photos[filename, rotate] = pg.transform.rotate(pg.image.load(os.path.join(PHOTO_DIR, filename)), rotate)
+    return _photos[filename, rotate]
+
+
 def load_face(filename, crop, rotate=0, size=(26, 30)):
     """Load a photo, crop (fractions x, y, w, h), and cut out an oval face."""
-    img = pg.transform.rotate(pg.image.load(os.path.join(PHOTO_DIR, filename)), rotate)
+    img = _photo(filename, rotate)
     w, h = img.get_size()
     rect = pg.Rect(int(crop[0] * w), int(crop[1] * h), int(crop[2] * w), int(crop[3] * h))
     face = pg.transform.smoothscale(img.subsurface(rect), size)
@@ -91,7 +101,38 @@ def load_face(filename, crop, rotate=0, size=(26, 30)):
     return out
 
 
-def demon(skin, eye, leg=0, arms="down", horns=True, face=None):
+def _weapon(s, weapon, attacking):
+    """Draw a role's weapon on a demon sprite. The attack pose doubles as the wind-up telegraph."""
+    wood, steel = (120, 75, 35), (220, 225, 235)
+    if weapon == "sword":
+        if attacking:  # raised overhead, about to swing
+            pg.draw.line(s, steel, (50, 10), (62, 1), 4)
+            pg.draw.line(s, (90, 60, 30), (46, 13), (50, 10), 3)
+            pg.draw.line(s, (200, 170, 60), (45, 6), (53, 14), 2)
+            pg.draw.arc(s, (255, 255, 255), (6, 4, 56, 50), 0.2, 1.4, 2)  # swoosh
+        else:
+            pg.draw.line(s, steel, (53, 42), (60, 18), 4)
+            pg.draw.line(s, (200, 170, 60), (48, 41), (58, 44), 2)
+    elif weapon == "bow":
+        if attacking:  # drawn and aimed straight at you
+            pg.draw.arc(s, wood, (20, 22, 24, 34), -1.3, 1.3, 3)
+            pg.draw.line(s, (230, 230, 230), (37, 25), (37, 53))
+            pg.draw.circle(s, (255, 255, 255), (32, 39), 3)  # arrowhead glint
+            pg.draw.circle(s, (255, 60, 60), (32, 39), 1)
+        else:
+            pg.draw.arc(s, wood, (2, 26, 14, 30), 1.9, 4.4, 3)
+            pg.draw.line(s, (230, 230, 230), (8, 28), (8, 54))
+    elif weapon == "staff":
+        if attacking:
+            pg.draw.circle(s, (150, 40, 255), (32, 5), 6)
+            pg.draw.circle(s, (230, 180, 255), (32, 5), 3)
+        else:
+            pg.draw.line(s, wood, (54, 60), (54, 16), 3)
+            pg.draw.circle(s, (150, 40, 255), (54, 13), 4)
+            pg.draw.circle(s, (230, 180, 255), (54, 13), 2)
+
+
+def demon(skin, eye, leg=0, arms="down", horns=True, face=None, weapon=None):
     s = _surf(64, 64)
     dark = tuple(c * 6 // 10 for c in skin)
     pg.draw.rect(s, dark, (22 + leg, 44, 7, 19))
@@ -101,13 +142,18 @@ def demon(skin, eye, leg=0, arms="down", horns=True, face=None):
     if arms == "down":
         pg.draw.line(s, skin, (21, 27), (12 + leg, 45), 5)
         pg.draw.line(s, skin, (43, 27), (52 - leg, 45), 5)
+    elif weapon == "bow":  # arms forward, holding the drawn bow
+        pg.draw.line(s, skin, (21, 27), (30, 40), 5)
+        pg.draw.line(s, skin, (43, 27), (36, 38), 5)
     else:
         pg.draw.line(s, skin, (21, 27), (12, 8), 5)
         pg.draw.line(s, skin, (43, 27), (52, 8), 5)
-        pg.draw.circle(s, (255, 140, 20), (32, 5), 5)
-        pg.draw.circle(s, (255, 240, 120), (32, 5), 2)
+        if not weapon:
+            pg.draw.circle(s, (255, 140, 20), (32, 5), 5)
+            pg.draw.circle(s, (255, 240, 120), (32, 5), 2)
     if face:
         s.blit(face, (32 - face.get_width() // 2, 0))
+        _weapon(s, weapon, arms != "down")
         return s
     pg.draw.circle(s, skin, (32, 16), 9)
     if horns:
@@ -139,7 +185,7 @@ def corpse(skin):
     return s
 
 
-def enemy_frames(skin, eye, horns=True, face=None):
+def enemy_frames(skin, eye, horns=True, face=None, weapon=None):
     pain = tuple(min(255, c + 100) for c in skin)
     pain_face = None
     if face:
@@ -148,61 +194,55 @@ def enemy_frames(skin, eye, horns=True, face=None):
         pain_face.set_colorkey(None)
         pain_face = _rekey(pain_face, face)
     return {
-        "walk": [demon(skin, eye, 0, horns=horns, face=face), demon(skin, eye, 3, horns=horns, face=face)],
-        "attack": demon(skin, eye, arms="up", horns=horns, face=face),
-        "pain": demon(pain, (255, 255, 255), horns=horns, face=pain_face),
+        "walk": [demon(skin, eye, 0, horns=horns, face=face, weapon=weapon),
+                 demon(skin, eye, 3, horns=horns, face=face, weapon=weapon)],
+        "attack": demon(skin, eye, arms="up", horns=horns, face=face, weapon=weapon),
+        "pain": demon(pain, (255, 255, 255), horns=horns, face=pain_face, weapon=weapon),
         "dead": corpse(skin),
     }
 
 
-# --- weapon sprites (64x48, scaled up when drawn) ------------------------
+# --- weapon sprites (photos from assets/, held in the bottom right) -------
 
-def _flash(s, pos, r):
-    pg.draw.circle(s, (255, 120, 0), pos, r)
-    pg.draw.circle(s, (255, 230, 90), pos, r * 2 // 3)
-    pg.draw.circle(s, (255, 255, 230), pos, r // 3)
-
-
-def pistol(firing=False):
-    s = _surf(64, 48)
-    if firing:
-        _flash(s, (32, 9), 9)
-    pg.draw.rect(s, (50, 50, 55), (27, 14, 10, 26))
-    pg.draw.rect(s, (90, 90, 100), (29, 14, 6, 24))
-    pg.draw.rect(s, (30, 30, 30), (31, 12, 2, 3))
-    pg.draw.ellipse(s, (205, 150, 115), (22, 32, 20, 18))
-    pg.draw.ellipse(s, (170, 120, 90), (22, 32, 20, 18), 2)
-    return s
+def hue_shift(img, degrees, sat=1.0):
+    """Rotate every pixel's hue (and scale its saturation), keeping alpha."""
+    out = img.copy()
+    c = pg.Color(0)
+    for y in range(out.get_height()):
+        for x in range(out.get_width()):
+            px = out.get_at((x, y))
+            if px.a == 0:
+                continue
+            h, s, v, _ = px.hsva
+            c.hsva = ((h + degrees) % 360, min(100.0, s * sat), v, 100)
+            out.set_at((x, y), (c.r, c.g, c.b, px.a))
+    return out
 
 
-def shotgun(firing=False):
-    s = _surf(64, 48)
-    if firing:
-        _flash(s, (32, 6), 12)
-    pg.draw.rect(s, (45, 45, 50), (25, 8, 6, 34))
-    pg.draw.rect(s, (45, 45, 50), (33, 8, 6, 34))
-    pg.draw.rect(s, (110, 110, 120), (27, 8, 2, 32))
-    pg.draw.rect(s, (110, 110, 120), (35, 8, 2, 32))
-    pg.draw.rect(s, (110, 65, 30), (22, 26, 20, 10))
-    pg.draw.ellipse(s, (205, 150, 115), (14, 30, 16, 16))
-    pg.draw.ellipse(s, (205, 150, 115), (36, 34, 18, 16))
-    return s
+def held_sprite(filename, scale, flip=False):
+    """Load a held-item photo, trim the transparent border, scale it, and optionally mirror it."""
+    img = pg.image.load(os.path.join(PHOTO_DIR, filename)).convert_alpha()
+    img = img.subsurface(img.get_bounding_rect()).copy()
+    img = pg.transform.smoothscale(img, (round(img.get_width() * scale), round(img.get_height() * scale)))
+    return pg.transform.flip(img, True, False) if flip else img
+
+
+def muzzle_flash(img, pos, size):
+    """Gun sprite with flash.png behind the muzzle at `pos` (fractions of its
+    width/height). The canvas grows up and left to fit the flash, so when it's drawn anchored
+    bottom-right the gun stays exactly where the idle frame is."""
+    flash = held_sprite("flash.png", 1.0)
+    flash = pg.transform.smoothscale(flash, (size, round(size * flash.get_height() / flash.get_width())))
+    fw, fh = flash.get_size()
+    cx, cy = pos[0] * img.get_width(), pos[1] * img.get_height() - fh * 0.22  # just past the barrel tip
+    pad_l, pad_t = max(0, round(fw / 2 - cx)), max(0, round(fh / 2 - cy))
+    out = pg.Surface((img.get_width() + pad_l, img.get_height() + pad_t), pg.SRCALPHA)
+    out.blit(flash, (round(cx + pad_l - fw / 2), round(cy + pad_t - fh / 2)))  # behind the gun
+    out.blit(img, (pad_l, pad_t))
+    return out
 
 
 TYLER = ("Tyler photo 1.jpg", (0.25, 0.22, 0.5, 0.48))
-
-
-def tyler_beam(firing=False):
-    s = _surf(64, 48)
-    if firing:
-        pg.draw.circle(s, (255, 60, 200), (32, 14), 14)
-        pg.draw.circle(s, (255, 200, 255), (32, 14), 9)
-    pg.draw.polygon(s, (70, 30, 90), [(18, 48), (24, 14), (40, 14), (46, 48)])
-    pg.draw.polygon(s, (150, 80, 180), [(18, 48), (24, 14), (40, 14), (46, 48)], 2)
-    s.blit(load_face(*TYLER, size=(16, 18)), (24, 20))
-    pg.draw.ellipse(s, (205, 150, 115), (8, 34, 16, 14))
-    pg.draw.ellipse(s, (205, 150, 115), (40, 34, 16, 14))
-    return s
 
 
 # --- sounds --------------------------------------------------------------

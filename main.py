@@ -1,18 +1,21 @@
+import asyncio
 import math
 import sys
 import pygame as pg
 
 from engine import assets
-from engine.settings import W, H, VIEW_H, BAR_H, SCALE, FPS, MOUSE_SENS, MOVE_SPEED, PITCH_SENS, MAX_PITCH, HEADSHOT_MULT
+from engine.settings import W, H, VIEW_H, BAR_H, SCALE, FOV, FPS, MOUSE_SENS, MOVE_SPEED, PITCH_SENS, MAX_PITCH, HEADSHOT_MULT
 from engine.world import World, LEVEL, cast_ray
 from engine.entities import Player, SPAWN_POOL
 from engine.weapons import WEAPON_TYPES
 from engine.render import Renderer
 from engine.grapple import Grapple
 from engine.webcam import WebcamPortrait
-from engine.projectiles import Grenade
-from engine.pickups import Powerups, TreeOfLife
+from engine.projectiles import Grenade, Rune
+from engine.pickups import Powerups
 from engine import boss
+
+WEB = sys.platform == "emscripten"  # running in the browser via pygbag
 
 
 class Game:
@@ -43,9 +46,15 @@ class Game:
         for cls in SPAWN_POOL + [boss.Verity] + boss.VARIANTS:  # build sprites up front to avoid mid-game hitches
             cls.get_frames()
         self.deaths = 0
+        self.lock_mouse()
+        self.reset()
+
+    @staticmethod
+    def lock_mouse():
         pg.event.set_grab(True)
         pg.mouse.set_visible(False)
-        self.reset()
+        if hasattr(pg.mouse, "set_relative_mode"):  # pygame-ce: real pointer lock in the browser
+            pg.mouse.set_relative_mode(True)
 
     def reset(self):
         self.world = World(LEVEL)
@@ -53,7 +62,6 @@ class Game:
         self.weapons = [w() for w in WEAPON_TYPES]
         self.weapon = self.weapons[0]
         self.grapple = Grapple()
-        self.minimap = self.build_minimap()
         self.walk_t = 0.0
         self.headshot_flash = 0.0
         self.grenades = self.max_grenades = 3
@@ -109,41 +117,35 @@ class Game:
             q["verity"].stun = 3.0
             self.say("Correct?! Impossible... (Verity is stunned: double damage!)", 2.5)
         else:
-            self.player.hurt(q["dmg"])
+            self.player.hurt(q["dmg"], q["verity"])
             self.play("hurt")
             right = q["answers"][q["correct"]]
             self.say(f"WRONG. It's {right}. I know everything.", 2.5)
 
-    MINIMAP_CELL = 2
+    RADAR_R = 16
 
-    def build_minimap(self):
-        c = self.MINIMAP_CELL
-        grid = self.world.grid
-        surf = pg.Surface((len(grid[0]) * c, len(grid) * c), pg.SRCALPHA)
-        surf.fill((0, 0, 0, 140))
-        for y, row in enumerate(grid):
-            for x, t in enumerate(row):
-                if t:
-                    surf.fill((150, 150, 150, 200), (x * c, y * c, c, c))
-        return surf
-
-    def draw_minimap(self):
-        c, ox, oy = self.MINIMAP_CELL, W - self.minimap.get_width() - 3, 3
-        scr, p = self.screen, self.player
-        scr.blit(self.minimap, (ox, oy))
-        to_px = lambda x, y: (ox + int(x * c), oy + int(y * c))
+    def draw_radar(self):
+        """Top-right compass: a blip on the ring for each enemy, in its direction relative
+        to where you're facing (up = ahead). Closer enemies are bigger and brighter."""
+        r, p, scr = self.RADAR_R, self.player, self.screen
+        cx, cy = W - r - 4, r + 4
+        bg = pg.Surface((r * 2 + 2, r * 2 + 2), pg.SRCALPHA)
+        pg.draw.circle(bg, (0, 0, 0, 140), (r + 1, r + 1), r + 1)
+        scr.blit(bg, (cx - r - 1, cy - r - 1))
+        pg.draw.circle(scr, (90, 90, 90), (cx, cy), r, 1)
+        half = FOV / 2  # view cone
+        for a in (-half, half):
+            pg.draw.line(scr, (60, 90, 60), (cx, cy), (cx + math.sin(a) * (r - 1), cy - math.cos(a) * (r - 1)))
         for e in self.world.enemies:
-            if e.alive:
-                scr.fill((255, 40, 40), (*to_px(e.x - 0.5, e.y - 0.5), 2, 2))
-
-        for i in self.world.items:
-            col = (0, 200, 60) if isinstance(i, TreeOfLife) else (255, 215, 0)
-            scr.fill(col, (*to_px(i.x - 0.5, i.y - 0.5), 2, 2))
-        for g in self.world.projectiles:
-            scr.fill((255, 160, 0), (*to_px(g.x, g.y), 1, 1))
-        px, py = to_px(p.x, p.y)
-        pg.draw.line(scr, (255, 255, 0), (px, py), (px + int(math.cos(p.angle) * 5), py + int(math.sin(p.angle) * 5)))
-        scr.fill((0, 255, 0), (px - 1, py - 1, 3, 3))
+            if not e.alive:
+                continue
+            rel = math.atan2(e.y - p.y, e.x - p.x) - p.angle
+            k = max(0.0, 1 - math.hypot(e.x - p.x, e.y - p.y) / 25)  # 1 = on top of you
+            col = (255, 220, 0) if isinstance(e, boss.Verity) else (255, int(40 + 60 * (1 - k)), int(40 + 60 * (1 - k)))
+            col = tuple(int(c * (0.45 + 0.55 * k)) for c in col)
+            size = 4 if isinstance(e, boss.Verity) else 1 + round(2 * k)
+            pg.draw.circle(scr, col, (cx + math.sin(rel) * (r - 2), cy - math.cos(rel) * (r - 2)), size)
+        scr.fill((0, 255, 0), (cx - 1, cy - 1, 3, 3))
 
     def wave_size(self):
         return self.wave + 2
@@ -193,10 +195,12 @@ class Game:
 
     def handle_input(self, dt):
         for ev in pg.event.get():
-            if ev.type == pg.QUIT or (ev.type == pg.KEYDOWN and ev.key == pg.K_ESCAPE):
+            if ev.type == pg.QUIT or (ev.type == pg.KEYDOWN and ev.key == pg.K_ESCAPE and not WEB):
                 self.portrait.stop()
                 pg.quit()
                 sys.exit()
+            if WEB and ev.type == pg.MOUSEBUTTONDOWN:  # browsers only lock the mouse after a click (Esc unlocks)
+                self.lock_mouse()
             if ev.type == pg.KEYDOWN:
                 if ev.key == pg.K_r and not self.player.alive:
                     self.reset()
@@ -278,7 +282,7 @@ class Game:
                 self.quiz = None
                 self.invert_t = self.backrooms_t = 0.0
             self.death_t += dt
-            if 1.6 < self.death_t < 3.2 and self.death_t >= self.next_chomp:
+            if self.killed_by_verity() and 1.6 < self.death_t < 3.2 and self.death_t >= self.next_chomp:
                 self.play("chomp")
                 self.next_chomp = self.death_t + 0.22
             return
@@ -313,12 +317,13 @@ class Game:
                 pg.draw.line(scr, (255, 60, 60), (cx + 4 * sx, cy + 4 * sy), (cx + 8 * sx, cy + 8 * sy), 2)
             img = self.font.render("HEADSHOT", True, (255, 60, 60))
             scr.blit(img, img.get_rect(center=(cx, cy + 18)))
+        self.draw_rune_warning()
         if p.hurt_flash > 0:
             ov = pg.Surface((W, VIEW_H), pg.SRCALPHA)
             ov.fill((255, 0, 0, int(p.hurt_flash * 300)))
             scr.blit(ov, (0, 0))
-        for i in range(self.grenades):
-            scr.blit(self.grenade_icon, (W - 18 - i * 16, VIEW_H - 18))
+        for i in range(self.grenades):  # under the radar, out of the way of the held weapon
+            scr.blit(self.grenade_icon, (W - 18 - i * 16, self.RADAR_R * 2 + 10))
         y = 3
         for name, t in self.powerups.timers.items():
             if t > 0:
@@ -327,14 +332,19 @@ class Game:
         if self.powerups.message_t > 0:
             img = self.big.render(self.powerups.message, True, (255, 215, 0))
             scr.blit(img, img.get_rect(center=(cx, cy + 34)))
-        self.draw_minimap()
+        if p.alive:
+            self.draw_radar()
         self.draw_status_bar()
         msgs = []
         if p.alive:
             self.draw_boss_ui()
         else:
-            boss.draw_brain_eating(scr, self.death_t or 0.0, self.dead_face, self.big)
-            if (self.death_t or 0) > 3.2:
+            t = self.death_t or 0.0
+            if self.killed_by_verity():
+                boss.draw_brain_eating(scr, t, self.dead_face, self.big)
+            else:
+                self.draw_death(t)
+            if t > (3.2 if self.killed_by_verity() else 1.5):
                 img = self.font.render(f"DIED ON WAVE {self.wave}  -  press R", True, (255, 60, 60))
                 scr.blit(img, img.get_rect(center=(cx, VIEW_H - 10)))
         if p.alive and self.countdown is not None:
@@ -342,6 +352,58 @@ class Game:
         for i, msg in enumerate(msgs):
             img = self.big.render(msg, True, (255, 40, 40))
             scr.blit(img, img.get_rect(center=(cx, cy - 40 + i * 24)))
+
+    def draw_rune_warning(self):
+        """Runes land under your feet, out of view: glow purple from the bottom of the screen
+        (faster as it's about to erupt) while you're standing in one."""
+        p = self.player
+        runes = [r for r in self.world.projectiles if isinstance(r, Rune)
+                 and math.hypot(r.x - p.x, r.y - p.y) < r.radius + p.radius]
+        if not runes or not p.alive:
+            return
+        k = max(r.t / r.delay for r in runes)
+        pulse = 0.6 + 0.4 * math.sin(k * k * 40)
+        ov = pg.Surface((W, 50), pg.SRCALPHA)
+        for y in range(50):
+            ov.fill((170, 60, 255, int(pulse * 150 * y / 50)), (0, y, W, 1))
+        self.screen.blit(ov, (0, VIEW_H - 50))
+        img = self.font.render("RUNE! MOVE!", True, (235, 200, 255))
+        self.screen.blit(img, img.get_rect(center=(W // 2, VIEW_H - 30)))
+
+    def killed_by_verity(self):
+        return isinstance(self.player.killer, boss.Verity)
+
+    def draw_death(self, t):
+        """Generic death screen: fade to red, your greyed-out face next to whoever got you."""
+        scr, cx, cy = self.screen, W // 2, VIEW_H // 2
+        shade = pg.Surface((W, VIEW_H), pg.SRCALPHA)
+        shade.fill((60, 0, 0, min(210, int(t * 260))))
+        scr.blit(shade, (0, 0))
+        if t < 0.5:
+            return
+        a = min(255, int((t - 0.5) * 400))  # everything below fades in
+        img = self.big.render("YOU DIED", True, (220, 30, 30))
+        img.set_alpha(a)
+        scr.blit(img, img.get_rect(center=(cx, 22)))
+        if self.dead_face:
+            face = pg.transform.grayscale(pg.transform.smoothscale(self.dead_face, (72, 72)))
+            face.fill((255, 150, 150), special_flags=pg.BLEND_RGB_MULT)
+            face.set_alpha(a)
+            scr.blit(face, (cx - 92, cy - 40))
+        k = self.player.killer
+        if k == "grenade":
+            name, sprite = "YOUR OWN GRENADE", Grenade.frames()[0]
+        elif k is not None and hasattr(k, "get_frames"):
+            name, sprite = (k.title or type(k).__name__).upper(), k.get_frames()["attack"]
+        else:
+            name, sprite = "SOMETHING", None
+        if sprite:
+            sprite = pg.transform.smoothscale(sprite, (72, 72))
+            sprite.set_alpha(a)
+            scr.blit(sprite, (cx + 20, cy - 40))
+        img = self.font.render(f"KILLED BY {name}", True, (255, 200, 200))
+        img.set_alpha(a)
+        scr.blit(img, img.get_rect(center=(cx, cy + 42)))
 
     def draw_boss_ui(self):
         scr = self.screen
@@ -405,7 +467,7 @@ class Game:
         pg.draw.rect(scr, (20, 20, 20), (face_x - 2, top + 1, face_w + 4, BAR_H - 2))
         scr.blit(face, (face_x, top + 2))
 
-    def run(self):
+    async def run(self):
         while True:
             dt = min(self.clock.tick(FPS) / 1000, 0.05)
             self.handle_input(dt)
@@ -414,7 +476,7 @@ class Game:
             if self.player.alive:
                 bob = (math.sin(self.walk_t * 8) * 4, abs(math.cos(self.walk_t * 8)) * 4)
                 self.weapon.draw(self.screen, bob)
-                self.grapple.draw(self.screen, bob)
+                self.grapple.draw(self.screen, self, bob)
                 if self.throw_t > 0.2:  # grenade leaving the hand
                     k = (0.4 - self.throw_t) / 0.2
                     img = pg.transform.smoothscale(Grenade.frames()[0], (int(50 - 30 * k),) * 2)
@@ -422,7 +484,8 @@ class Game:
             self.draw_hud()
             pg.transform.scale(self.screen, self.window.get_size(), self.window)
             pg.display.flip()
+            await asyncio.sleep(0)  # hand control back to the browser each frame
 
 
 if __name__ == "__main__":
-    Game().run()
+    asyncio.run(Game().run())

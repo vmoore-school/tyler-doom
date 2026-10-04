@@ -14,16 +14,14 @@ class Weapon:
     spread = 0.0         # radians, random per pellet
     ammo = 50
     sound = "pistol"
-    draw_scale = 2.5
     pierce = False       # hit every enemy along the ray, not just the nearest
-    offset_x = 0         # horizontal screen offset of the held weapon
+    margin = 0           # gap between the weapon and the right edge of the screen
+    drop = 8             # pixels hidden below the bottom of the view
 
     def __init__(self):
         self.timer = 0.0
         self.flash = 0.0
-        idle, fire = self.make_frames()
-        size = (int(idle.get_width() * self.draw_scale), int(idle.get_height() * self.draw_scale))
-        self.frames = [pg.transform.scale(idle, size), pg.transform.scale(fire, size)]
+        self.frames = list(self.make_frames())  # (idle, firing), already at screen size
 
     def make_frames(self):
         raise NotImplementedError
@@ -50,16 +48,21 @@ class Weapon:
     def draw(self, screen, bob):
         img = self.frames[1 if self.flash > 0 else 0]
         recoil = int(self.timer / self.cooldown * 10) if self.cooldown else 0
-        x = W // 2 + self.offset_x - img.get_width() // 2 + int(bob[0])
-        y = VIEW_H - img.get_height() + 8 + int(bob[1]) + recoil
-        screen.blit(img, (x, y))
+        x, y = self.pos(img, bob)
+        screen.blit(img, (x, y + recoil))
+
+    def pos(self, img, bob):
+        """Top-left of the held weapon: anchored to the bottom-right corner."""
+        return (W - self.margin - img.get_width() + int(bob[0]),
+                VIEW_H - img.get_height() + self.drop + int(bob[1]))
 
 
 class Pistol(Weapon):
     name, damage, cooldown, ammo = "PISTOL", 15, 0.35, 60
 
     def make_frames(self):
-        return assets.pistol(), assets.pistol(True)
+        img = assets.held_sprite("pistol.png", 0.33)
+        return img, assets.muzzle_flash(img, (0.36, 0.02), 30)
 
 
 class Shotgun(Weapon):
@@ -67,14 +70,16 @@ class Shotgun(Weapon):
     pellets, spread, sound = 7, 0.07, "shotgun"
 
     def make_frames(self):
-        return assets.shotgun(), assets.shotgun(True)
+        img = assets.held_sprite("Shotgun.webp", 0.6)
+        return img, assets.muzzle_flash(img, (0.27, 0.03), 44)
 
 
 class TylerBeam(Weapon):
-    """Continuous piercing beam made of tiled Tyler faces."""
+    """Continuous piercing beam made of tiled Tyler faces, fired from an open purple palm."""
     name, damage, cooldown, ammo = "TYLER DEATH BEAM", 60, 0.08, 999
     pierce, sound = True, "beam"
-    offset_x, draw_scale = 75, 2.0
+    margin, drop = 6, 4
+    palm = (0.5, 0.6)  # beam origin as a fraction of the open hand
 
     def __init__(self):
         super().__init__()
@@ -82,7 +87,11 @@ class TylerBeam(Weapon):
         self.t = 0.0
 
     def make_frames(self):
-        return assets.tyler_beam(), assets.tyler_beam(True)
+        # Left-hand photos: mirror them into a right hand and turn them purple. Same scale for
+        # both so the hand doesn't change size when it opens.
+        closed, open_ = (assets.hue_shift(assets.held_sprite(f, 0.4, flip=True), 255, sat=1.6)
+                         for f in ("grapple_hand_closed.png", "grapple_hand_open.png"))
+        return closed, open_
 
     def fire(self, game):
         if super().fire(game):
@@ -93,11 +102,10 @@ class TylerBeam(Weapon):
         self.t += dt
 
     def draw(self, screen, bob):
-        super().draw(screen, bob)
-        if self.flash > 0:
-            gun_h = self.frames[0].get_height()
-            x0 = W / 2 + self.offset_x + bob[0]
-            y0 = VIEW_H - gun_h + 8 + bob[1] + 14 * self.draw_scale  # muzzle
+        if self.flash > 0:  # beam first, so the hand covers its base
+            hand = self.frames[1]
+            hx, hy = self.pos(hand, bob)
+            x0, y0 = hx + hand.get_width() * self.palm[0], hy + hand.get_height() * self.palm[1]
 
             x1, y1 = W / 2, VIEW_H / 2
             pg.draw.line(screen, (255, 80, 220), (x0, y0), (x1, y1), 6)
@@ -110,6 +118,7 @@ class TylerBeam(Weapon):
                 y = y0 + (y1 - y0) * f
                 img = pg.transform.scale(self.tile, (size, size))
                 screen.blit(img, (x - size / 2, y - size / 2))
+        super().draw(screen, bob)
 
 
 # Order = number key bindings (1, 2, ...). Register new weapons here.
