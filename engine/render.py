@@ -294,8 +294,14 @@ class Renderer:
             soft = visible - pg.mask.from_surface(img, 254).count()  # partly transparent pixels
             out = img
             if img.get_flags() & pg.SRCALPHA and visible and soft <= visible * 0.15:
-                out = half.to_surface(setsurface=img, unsetcolor=KEY).convert()
-                out.set_colorkey(KEY)
+                # to_surface needs its target in the same pixel format as setsurface, and some
+                # images (in the browser build especially) aren't in its default format: draw into
+                # a copy of the sprite itself. If pygame still refuses, just use the sprite as is.
+                try:
+                    out = half.to_surface(img.copy(), setsurface=img, unsetcolor=KEY).convert()
+                    out.set_colorkey(KEY)
+                except ValueError:
+                    out = img
             if len(self._keyed) > 1000:
                 self._keyed.clear()
             hit = self._keyed[id(img)] = (img, out)  # holding img keeps its id from being reused
