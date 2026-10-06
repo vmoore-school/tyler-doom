@@ -251,8 +251,9 @@ TYLER = ("enemies/Tyler_3.png",)
 
 # --- sounds --------------------------------------------------------------
 
-def load_sound(filename, skip=0.0):
-    """A sound file from assets/ (path inside it), minus `skip` seconds of lead-in.
+def load_sound(filename, skip=0.0, length=None):
+    """A sound file from assets/ (path inside it), minus `skip` seconds of lead-in,
+    cut to `length` seconds if given.
     Returns None if the mixer is unavailable or the file can't be read."""
     if not pg.mixer.get_init():
         return None
@@ -261,11 +262,13 @@ def load_sound(filename, skip=0.0):
     except (pg.error, FileNotFoundError) as e:
         print("couldn't load sound", filename, e)
         return None
-    if skip:
+    if skip or length:
         freq, size, chans = pg.mixer.get_init()
         frame = abs(size) // 8 * chans
         raw = snd.get_raw()
-        snd = pg.mixer.Sound(buffer=raw[int(skip * freq) * frame:])
+        start = int(skip * freq) * frame
+        end = start + int(length * freq) * frame if length else len(raw)
+        snd = pg.mixer.Sound(buffer=raw[start:end])
     return snd
 
 

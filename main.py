@@ -6,10 +6,11 @@ import sys
 import pygame as pg
 
 from engine import assets
-from engine.settings import W, H, VIEW_H, BAR_H, SCALE, FOV, RESOLUTIONS, FPS, MOUSE_SENS, MOVE_SPEED, PITCH_SENS, MAX_PITCH, HEADSHOT_MULT
+from engine.settings import W, H, VIEW_H, BAR_H, SCALE, FOV, RESOLUTIONS, FPS, MOUSE_SENS, MOVE_SPEED,\
+    SPRINT_MULT, SLIDE_SPEED, SLIDE_TIME, SLIDE_DROP, SLIDE_STEER, DIVE_LIFT, DOUBLE_TAP, PITCH_SENS, MAX_PITCH, HEADSHOT_MULT
 from engine.world import World, LEVEL, cast_ray
 from engine.entities import Player, SPAWN_POOL
-from engine.weapons import WEAPON_TYPES
+from engine.weapons import WEAPON_TYPES, STARTING_WEAPON
 from engine.render import Renderer
 from engine.grapple import Grapple
 from engine.webcam import WebcamPortrait
@@ -52,6 +53,9 @@ class Game:
             "powerup": assets.noise_sound(0.25, 0.25, 0.3, 6),
             "chomp": assets.noise_sound(0.12, 0.6, 4, 7),
             "rifle": assets.noise_sound(0.1, 0.4, 3, 8),
+            "swing": assets.noise_sound(0.18, 0.12, 0.6, 9),  # whoosh
+            "slide": assets.noise_sound(0.5, 0.12, 1.2, 11),
+            **{f"punch{i}": assets.load_sound(f"weapons/punch{i}.mp3") for i in range(1, 7)},
             "reload": assets.load_sound("weapons/Reload.opus", skip=0.33),  # starts after 0.37s of silence
         }
         Grenade.frames()
@@ -186,7 +190,7 @@ class Game:
         self.weapons = [w() for w in WEAPON_TYPES]
         for w in self.weapons:
             w.prepare(self.k)
-        self.weapon = self.weapons[0]
+        self.weapon = next(w for w in self.weapons if type(w) is STARTING_WEAPON)
         self.prev_weapon = self.weapon  # where T switches back to from the beam
         self.grapple = Grapple()
         self.walk_t = 0.0
@@ -198,7 +202,8 @@ class Game:
         self.countdown = None
         self.speech, self.speech_t = "", 0.0
         self.quiz = None
-        self.backrooms_t = self.invert_t = 0.0
+        self.backrooms_t = self.sens_t = 0.0
+        self.sens_mult = 1.0  # Falsity scrambles your look sensitivity while sens_t > 0
         self.death_t, self.dead_face, self.next_chomp = None, None, 0.0
         self.beam_enabled = False      # the Tyler Death Beam is opt-in per round (press T)
         self.leaderboard_valid = True  # turned off by enabling the beam
@@ -253,6 +258,16 @@ class Game:
             self.show_notice((f"{w.name} IS LOCKED", f"Unlocks at wave {w.unlock_wave}"), 2.0)
             return
         self.switch_to(w)
+
+    def cycle_weapon(self, step):
+        """Scroll wheel: next/previous unlocked gun, wrapping around. Locked ones are skipped
+        silently (no 'locked' notice, unlike the number keys)."""
+        slots = [w for w in self.gun_slots() if self.wave >= w.unlock_wave]
+        if not slots:
+            return
+        cur = self.prev_weapon if self.weapon.cheat else self.weapon  # from the beam: step from the last gun
+        i = slots.index(cur) if cur in slots else 0
+        self.switch_to(slots[(i + step) % len(slots)])
 
     def switch_to(self, w):
         if w is self.weapon:
@@ -358,7 +373,7 @@ class Game:
             if not (0 < along < wall and abs(dy * c - dx * s) < e.radius):
                 continue
             # Height (world units, floor = 0, eye = 0.5) the crosshair points at at this distance.
-            z = 0.5 + p.z + p.pitch * along / self.renderer.base_proj
+            z = 0.5 + p.cam_z + p.pitch * along / self.renderer.base_proj
             z0 = getattr(e, "z", 0.0)  # floating enemies
             if z0 <= z <= z0 + e.scale:
                 hits.append((along, e, z >= z0 + e.scale * (1 - e.head_frac)))
@@ -435,9 +450,16 @@ class Game:
                 elif self.quiz and ev.key in (pg.K_z, pg.K_x, pg.K_c):
                     self.answer_quiz((pg.K_z, pg.K_x, pg.K_c).index(ev.key))
                 elif ev.key == pg.K_SPACE and self.player.alive and self.player.z == 0:
-                    self.player.vz = 4.2  # jump
+                    self.player.vz = 4.2  # jump (cancels a slide)
+                    self.player.slide_t = 0.0
+                elif ev.key in (pg.K_LCTRL, pg.K_RCTRL) and self.player.alive:
+                    self.start_slide()
                 elif pg.K_1 <= ev.key <= pg.K_9:
                     self.select_weapon(ev.key - pg.K_1)
+                if ev.key in self.TAP_DIRS:
+                    self.direction_tap(ev.key)
+            if ev.type == pg.KEYUP:
+                self.tap_held.discard(ev.key)
             if (ev.type == pg.MOUSEBUTTONDOWN and ev.button == 3) or (ev.type == pg.KEYDOWN and ev.key == pg.K_e):
                 if self.player.alive:
                     self.grapple.fire(self)
@@ -445,29 +467,91 @@ class Game:
                 self.grapple.release()
             if (ev.type == pg.MOUSEBUTTONDOWN and ev.button == 2) or (ev.type == pg.KEYDOWN and ev.key in (pg.K_g, pg.K_q)):
                 self.throw_grenade()
+            if ev.type == pg.MOUSEWHEEL and self.player.alive and ev.y:
+                self.cycle_weapon(-1 if ev.y > 0 else 1)  # wheel down = next weapon
             if ev.type == pg.MOUSEMOTION:
-                inv = -1 if self.invert_t > 0 else 1  # Falsity lies to your mouse
-                self.player.angle += ev.rel[0] * MOUSE_SENS * inv
-                self.player.pitch = max(-MAX_PITCH, min(MAX_PITCH, self.player.pitch - ev.rel[1] * PITCH_SENS * inv))
+                sens = self.look_sens()  # Falsity lies to your mouse
+                self.player.angle += ev.rel[0] * MOUSE_SENS * sens
+                self.player.pitch = max(-MAX_PITCH, min(MAX_PITCH, self.player.pitch - ev.rel[1] * PITCH_SENS * sens))
         p = self.player
         if not p.alive or self.menu.active:
             return
         keys = pg.key.get_pressed()
         if keys[pg.K_LEFT]:
-            p.angle -= 2.5 * dt
+            p.angle -= 2.5 * self.look_sens() * dt
         if keys[pg.K_RIGHT]:
-            p.angle += 2.5 * dt
-        fwd = (keys[pg.K_w] or keys[pg.K_UP]) - (keys[pg.K_s] or keys[pg.K_DOWN])
-        strafe = keys[pg.K_d] - keys[pg.K_a]
-        if fwd or strafe:
-            c, s = math.cos(p.angle), math.sin(p.angle)
-            mx, my = fwd * c - strafe * s, fwd * s + strafe * c
-            n = math.hypot(mx, my)
-            step = MOVE_SPEED * self.powerups.speed_mult * dt / n
-            self.world.move(p, mx * step, my * step)
-            self.walk_t += dt
+            p.angle += 2.5 * self.look_sens() * dt
+        speed = MOVE_SPEED * self.powerups.speed_mult
+        if p.slide_t > 0:  # sliding: easing from a burst down to sprint speed, steerable with WASD
+            want = self.move_input(keys)
+            if want != (0.0, 0.0):  # turn the slide toward the held direction, at most SLIDE_STEER rad/s
+                cur = math.atan2(p.slide_dir[1], p.slide_dir[0])
+                diff = (math.atan2(want[1], want[0]) - cur + math.pi) % (2 * math.pi) - math.pi
+                cur += max(-SLIDE_STEER * dt, min(SLIDE_STEER * dt, diff))
+                p.slide_dir = (math.cos(cur), math.sin(cur))
+            k = p.slide_t / SLIDE_TIME
+            step = speed * (SPRINT_MULT + (SLIDE_SPEED - SPRINT_MULT) * k * k) * dt
+            self.world.move(p, p.slide_dir[0] * step, p.slide_dir[1] * step)
+        else:
+            mx, my = self.move_input(keys)
+            if mx or my:
+                sprinting = keys[pg.K_LSHIFT] or keys[pg.K_RSHIFT]
+                sprinting = sprinting and ((keys[pg.K_w] or keys[pg.K_UP]) and not (keys[pg.K_s] or keys[pg.K_DOWN]))
+                mult = SPRINT_MULT if sprinting else 1.0
+                self.world.move(p, mx * speed * mult * dt, my * speed * mult * dt)
+                self.walk_t += dt * mult  # faster head bob when sprinting
         if pg.mouse.get_pressed()[0]:
             self.weapon.fire(self)
+
+    def look_sens(self):
+        return self.sens_mult if self.sens_t > 0 else 1.0
+
+    def move_input(self, keys):
+        """Unit vector of the WASD/arrow movement in world space, or (0, 0)."""
+        fwd = (keys[pg.K_w] or keys[pg.K_UP]) - (keys[pg.K_s] or keys[pg.K_DOWN])
+        strafe = keys[pg.K_d] - keys[pg.K_a]
+        if not (fwd or strafe):
+            return 0.0, 0.0
+        c, s = math.cos(self.player.angle), math.sin(self.player.angle)
+        mx, my = fwd * c - strafe * s, fwd * s + strafe * c
+        n = math.hypot(mx, my)
+        return mx / n, my / n
+
+    # direction key -> (forward, strafe right) for double-tap slides
+    TAP_DIRS = {pg.K_w: (1, 0), pg.K_UP: (1, 0), pg.K_s: (-1, 0), pg.K_DOWN: (-1, 0), pg.K_a: (0, -1), pg.K_d: (0, 1)}
+    tap_held = set()  # direction keys down right now (browsers resend KEYDOWN while a key is held)
+    last_tap = (None, 0.0)
+
+    def direction_tap(self, key):
+        """Double-tapping a direction key slides that way (relative to where you're facing)."""
+        if key in self.tap_held:  # auto-repeat, not a new tap
+            return
+        self.tap_held.add(key)
+        now = pg.time.get_ticks() / 1000
+        prev_key, prev_t = self.last_tap
+        if self.TAP_DIRS[prev_key or key] == self.TAP_DIRS[key] and now - prev_t <= DOUBLE_TAP and self.player.alive:
+            fwd, strafe = self.TAP_DIRS[key]
+            c, s = math.cos(self.player.angle), math.sin(self.player.angle)
+            self.start_slide((fwd * c - strafe * s, fwd * s + strafe * c))
+            self.last_tap = (None, 0.0)  # a third tap starts a new double-tap
+        else:
+            self.last_tap = (key, now)
+
+    def start_slide(self, d=None):
+        """Ctrl (or a double-tapped direction): a burst along the way you're moving (or `d`), camera
+        dipped. Needs you moving if no direction is given. In mid-air it's a dive (once per jump):
+        a small upward pop so you carry further, and any slide left when you land carries on."""
+        p = self.player
+        if p.slide_t > 0 or p.slide_cd > 0 or (p.z > 0 and p.dived):
+            return
+        d = d or self.move_input(pg.key.get_pressed())
+        if d == (0.0, 0.0):
+            return
+        if p.z > 0:
+            p.dived = True
+            p.vz = max(p.vz, DIVE_LIFT)
+        p.slide_dir, p.slide_t = d, SLIDE_TIME
+        self.play("slide")
 
     def update(self, dt):
         self.weapon.update(dt)
@@ -477,13 +561,22 @@ class Game:
         self.throw_t = max(0.0, self.throw_t - dt)
         self.speech_t = max(0.0, self.speech_t - dt)
         self.backrooms_t = max(0.0, self.backrooms_t - dt)
-        self.invert_t = max(0.0, self.invert_t - dt)
+        self.sens_t = max(0.0, self.sens_t - dt)
         self.notice_t = max(0.0, self.notice_t - dt)
         p = self.player
+        if p.slide_t > 0:
+            p.slide_t = max(0.0, p.slide_t - dt)
+            if p.slide_t == 0:
+                p.slide_cd = 0.35
+        else:
+            p.slide_cd = max(0.0, p.slide_cd - dt)
+        target = SLIDE_DROP if p.slide_t > 0.1 else 0.0  # dip fast, come back up as the slide ends
+        p.crouch += (target - p.crouch) * min(1.0, dt * 14)
         p.vz -= 12.0 * dt  # jump physics
         p.z = max(0.0, p.z + p.vz * dt)
         if p.z == 0:
             p.vz = 0.0
+            p.dived = False
         if self.quiz:
             self.quiz["t"] -= dt
             if self.quiz["t"] <= 0 or not self.quiz["verity"].alive:
@@ -511,7 +604,7 @@ class Game:
                 self.death_t, self.dead_face = 0.0, self.portrait.snapshot()
                 self.deaths += 1
                 self.quiz = None
-                self.invert_t = self.backrooms_t = 0.0
+                self.sens_t = self.backrooms_t = 0.0
             self.death_t += dt
             if self.killed_by_verity() and 1.6 < self.death_t < 3.2 and self.death_t >= self.next_chomp:
                 self.play("chomp")
@@ -704,8 +797,8 @@ class Game:
         scr = self.screen
         if self.backrooms_t > 0:  # the Backrooms: buzzing yellow haze
             self.tint((210, 190, 70), 70 + 30 * math.sin(self.backrooms_t * 40))
-        if self.invert_t > 0:
-            img = self.font.render("CONTROLS INVERTED", True, (90, 140, 255))
+        if self.sens_t > 0:
+            img = self.font.render("SENSITIVITY " + ("WAY UP" if self.sens_mult > 1 else "WAY DOWN"), True, (90, 140, 255))
             scr.blit(img, img.get_rect(center=(W // 2, VIEW_H - 30)))
         v = self.boss()
         if v and v.alive:
@@ -744,7 +837,8 @@ class Game:
         face_w = BAR_H - 4
         face_x = W // 2 - face_w // 2
         boxes = [  # (x, width, value, label)
-            (2, 66, "RELOAD" if self.weapon.reloading else f"{self.weapon.in_clip}/{self.weapon.clip}",
+            (2, 66, "MELEE" if self.weapon.melee else "INF" if self.weapon.infinite else "RELOAD" if self.weapon.reloading
+             else f"{self.weapon.in_clip}/{self.weapon.clip}",
              self.weapon.name if self.label_font.size(self.weapon.name)[0] <= 62
              else self.weapon.short_name or self.weapon.name),
             (70, 66, f"{p.health}%", "HEALTH"),

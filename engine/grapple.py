@@ -35,14 +35,14 @@ class Grapple:
     def shoulder_pos(self, p):
         f, r, u = self.shoulder
         c, s = math.cos(p.angle), math.sin(p.angle)
-        return (p.x + c * f - s * r, p.y + s * f + c * r, p.z + 0.5 + u)
+        return (p.x + c * f - s * r, p.y + s * f + c * r, p.cam_z + 0.5 + u)
 
     def fire(self, game):
         if self.state != "idle":
             return
         p, proj = game.player, game.renderer.base_proj
         c, s = math.cos(p.angle), math.sin(p.angle)
-        eye = 0.5 + p.z
+        eye = 0.5 + p.cam_z
         slope = p.pitch / proj  # height gained per unit travelled along the aim (same as hitscan)
         dist = cast_ray(game.world, p.x, p.y, p.angle)[0]
         self.grabbed = True
@@ -105,7 +105,7 @@ class Grapple:
         c, s = math.cos(p.angle), math.sin(p.angle)
         depth = dx * c + dy * s
         side = -dx * s + dy * c
-        return (r.w / 2 + side / depth * r.proj, r.horizon + r.proj / depth * (0.5 + p.z - pt[2]), depth)
+        return (r.w / 2 + side / depth * r.proj, r.horizon + r.proj / depth * (0.5 + p.cam_z - pt[2]), depth)
 
     def draw(self, screen, game, bob):
         if self.state == "idle":

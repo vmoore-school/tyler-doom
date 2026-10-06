@@ -176,13 +176,14 @@ class VerityVariant(Enemy):
 
 
 class Falsity(VerityVariant):
-    """Blue. Lies to your mouse: inverts your aim."""
+    """Blue. Lies to your mouse: your look sensitivity goes randomly way up or way down."""
     add, mult, title = (0, 0, 200), (80, 110, 255), "Falsity"
     attack_range = 8.0
 
     def perform_attack(self, game, sees, dist):
         if sees:
-            game.invert_t = 3.0
+            game.sens_t = 3.0
+            game.sens_mult = random.uniform(0.25, 0.45) if random.random() < 0.5 else random.uniform(2.2, 3.5)
             game.say("Falsity: everything you know is a lie.", 2.0)
 
 

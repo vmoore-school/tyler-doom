@@ -1,4 +1,5 @@
 import math
+import os
 import random
 import pygame as pg
 from . import assets
@@ -23,6 +24,8 @@ class Weapon:
     margin = 0           # gap between the weapon and the right edge of the screen
     drop = 8             # pixels hidden below the bottom of the view
     cheat = False        # locked until the player opts in (and loses leaderboard eligibility)
+    melee = False        # no clip / reloading (the status bar shows MELEE instead of ammo)
+    infinite = False     # never uses up its clip or reloads (the status bar shows INF)
 
     def __init__(self):
         self.timer = 0.0
@@ -56,7 +59,7 @@ class Weapon:
         return self.reload_t > 0
 
     def reload(self, game):
-        if self.reloading or self.in_clip >= self.clip:
+        if self.infinite or self.reloading or self.in_clip >= self.clip:
             return
         self.reload_t = self.reload_time
         self.flash = 0.0
@@ -89,7 +92,7 @@ class Weapon:
         if self.in_clip <= 0:
             self.reload(game)
             return False
-        if not game.powerups.active("INFINITE AMMO"):
+        if not (self.infinite or game.powerups.active("INFINITE AMMO")):
             self.in_clip -= 1
         self.timer = self.cooldown / game.powerups.fire_rate
         self.flash = 0.08
@@ -117,6 +120,131 @@ class Weapon:
         k = self.k
         return (int(W * k - self.margin * k - img.get_width() + bob[0] * k),
                 int(VIEW_H * k - img.get_height() + self.drop * k + bob[1] * k))
+
+
+class Fist(Weapon):
+    """Melee punch with the (mirrored) closed grapple hand. The fist rests low in the bottom-right,
+    then: a short pull back, a fast jab up toward the crosshair (shrinking as it reaches away
+    from you; the hit lands at full reach), a brief hold, and an eased return."""
+    name, damage, cooldown = "FIST", 45, 0.38
+    melee, sound = True, "swing"
+    reach = 1.5          # world units
+    arc = math.radians(35)  # half-angle of the area in front of you that a punch hits
+    knockback = 0.3
+    clip = 1
+    margin, drop = 10, 52   # rest pose: low in the right corner
+    PUNCH_SOUNDS = 6        # weapons/punch1.mp3 .. punch6.mp3 (one is picked at random per hit)
+    # Keyframes over the punch (fraction of it): (time, offset x, offset y, scale, tilt degrees).
+    # Offsets are fractions of the way from the rest pose to the target near the crosshair.
+    KEYS = [(0.00, 0.00, 0.00, 1.00, 0),
+            (0.12, -0.06, -0.08, 1.06, -4),  # pull back (down/right, a touch bigger: nearer you)
+            (0.32, 1.00, 1.00, 0.68, 6),     # full reach
+            (0.42, 0.97, 0.97, 0.70, 5),     # hold
+            (1.00, 0.00, 0.00, 1.00, 0)]     # back to rest
+    HIT_AT = 0.30
+    WRIST = (0.06, 0.38)  # wrist centre, as fractions of the fist's size from its centre (mirrored sprite)
+    ARM_W = 0.85          # forearm width as a fraction of the fist's width
+    ELBOW = (5, 120)      # where the forearm ends, off the bottom-right corner (retro pixels past it)
+
+    def __init__(self):
+        self.swing_len = 0.0
+        self.game = None
+        self.hit_pending = False
+        self._xf = {}  # (render scale, scale step, angle step) -> transformed sprite
+        super().__init__()
+
+    def make_frames(self, k):
+        img = assets.held_sprite("weapons/grapple_hand_closed.png", 1.0, flip=True)  # left hand -> right
+        scale = 100 * k / img.get_height()
+        img = pg.transform.smoothscale(img, (round(img.get_width() * scale), round(img.get_height() * scale)))
+        # Forearm (wrist at the top), sized to the fist once; stretched/rotated per frame in draw().
+        arm = assets.held_sprite("weapons/grapple_arm.png", 1.0, flip=True)
+        self.arm = pg.transform.smoothscale(arm, (round(img.get_width() * self.ARM_W), round(img.get_width() * self.ARM_W * arm.get_height() / arm.get_width())))
+        return img, img
+
+    def reload(self, game):
+        pass
+
+    def refill(self):
+        pass
+
+    def fire(self, game):
+        if self.timer > 0:
+            return False
+        self.swing_len = self.timer = self.cooldown / game.powerups.fire_rate
+        self.game, self.hit_pending = game, True  # the sound plays when the punch lands (see strike)
+        return True
+
+    def update(self, dt):
+        super().update(dt)
+        if self.hit_pending and self.progress() >= self.HIT_AT:
+            self.hit_pending = False
+            self.strike(self.game)
+
+    def progress(self):
+        """0..1 through the current punch (1 = idle)."""
+        return 1.0 if self.swing_len <= 0 else 1 - self.timer / self.swing_len
+
+    def strike(self, game):
+        """Hit every enemy in a short arc in front of you (that isn't behind a wall)."""
+        p = game.player
+        if not p.alive:
+            return
+        hit = False
+        for e in game.world.enemies:
+            if not e.alive:
+                continue
+            dx, dy = e.x - p.x, e.y - p.y
+            d = math.hypot(dx, dy)
+            rel = (math.atan2(dy, dx) - p.angle + math.pi) % (2 * math.pi) - math.pi
+            if d - e.radius > self.reach or abs(rel) > self.arc or not game.world.line_of_sight(p.x, p.y, e.x, e.y):
+                continue
+            e.hurt(self.damage * game.powerups.damage_mult)
+            if d > 1e-6:
+                game.world.move(e, dx / d * self.knockback, dy / d * self.knockback)
+            hit = True
+        game.play(f"punch{random.randint(1, self.PUNCH_SOUNDS)}" if hit else "swing")
+
+    def pose(self):
+        """(offset x, offset y, scale, tilt) at the current point of the punch."""
+        u = self.progress()
+        for (t0, *a), (t1, *b) in zip(self.KEYS, self.KEYS[1:]):
+            if u <= t1:
+                t = (u - t0) / (t1 - t0)
+                t = 1 - (1 - t) ** 3 if t1 <= 0.32 else t * t * (3 - 2 * t)  # snappy out, smooth back
+                return [x + (y - x) * t for x, y in zip(a, b)]
+        return list(self.KEYS[-1][1:])
+
+    def transformed(self, scale, tilt):
+        """The fist scaled and tilted (cached in small steps; rotozoom is smooth but slow)."""
+        key = (self.k, round(scale * 50), round(tilt / 2))
+        if key not in self._xf:
+            sc, a = key[1] / 50, key[2] * 2
+            self._xf[key] = self.frames[0] if (sc, a) == (1.0, 0) else pg.transform.rotozoom(self.frames[0], a, sc)
+        return self._xf[key]
+
+    def draw(self, screen, bob):
+        img = self.frames[0]
+        k = self.k
+        x, y = self.pos(img, bob)
+        rest = pg.Vector2(x + img.get_width() / 2, y + img.get_height() / 2)
+        # Knuckles (top of the sprite) end up just below and right of the crosshair.
+        target = pg.Vector2(W * k / 2 + 12 * k, VIEW_H * k / 2 + 6 * k + img.get_height() * 0.68 / 2)
+        ox, oy, scale, tilt = self.pose()
+        centre = pg.Vector2(rest.x + (target.x - rest.x) * ox, rest.y + (target.y - rest.y) * oy)
+        if self.progress() < 1:  # forearm from the wrist to off-screen, so the cut-off wrist never shows
+            wrist = centre + pg.Vector2(self.WRIST[0] * img.get_width(), self.WRIST[1] * img.get_height()).rotate(-tilt) * scale
+            elbow = pg.Vector2(W * k + self.ELBOW[0] * k + bob[0] * k, VIEW_H * k + self.ELBOW[1] * k + bob[1] * k)
+            v = wrist - elbow
+            length = v.length()
+            if length > 1:
+                width = max(1, round(self.arm.get_width() * scale))
+                arm = pg.transform.scale(self.arm, (width, round(length) + width // 3))  # a little overlap under the fist
+                arm = pg.transform.rotate(arm, math.degrees(math.atan2(-v.x, -v.y)))  # wrist end points at the fist
+                mid = elbow + v / 2 + v.normalize() * (width // 6)
+                screen.blit(arm, arm.get_rect(center=(round(mid.x), round(mid.y))))
+        fist = self.transformed(scale, tilt)
+        screen.blit(fist, fist.get_rect(center=(round(centre.x), round(centre.y))))
 
 
 class Pistol(Weapon):
@@ -153,8 +281,7 @@ class TylerBeam(Weapon):
     """Continuous piercing beam made of tiled Tyler faces, fired from an open purple palm."""
     name, damage, cooldown = "TYLER DEATH BEAM", 60, 0.08
     short_name = "TYLER BEAM"
-    pierce, sound, cheat = True, "beam", True
-    clip, reload_time = 100, 2.5
+    pierce, sound, cheat, infinite = True, "beam", True, True
     margin, drop = 6, 4
     palm = (0.5, 0.6)  # beam origin as a fraction of the open hand
     _purple = None     # full-size purple hands, shared by every render scale
@@ -205,4 +332,5 @@ class TylerBeam(Weapon):
 
 # Register new weapons here. Number keys (1, 2, ...) go to the non-cheat weapons in this order;
 # cheat weapons have their own key (T for the Tyler Death Beam).
-WEAPON_TYPES = [Pistol, Shotgun, AssaultRifle, TylerBeam]
+WEAPON_TYPES = [Fist, Pistol, Shotgun, AssaultRifle, TylerBeam]
+STARTING_WEAPON = Pistol

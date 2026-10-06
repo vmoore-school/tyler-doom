@@ -31,10 +31,13 @@ To publish on GitHub Pages: Settings -> Pages -> Source: GitHub Actions, then ru
 | WASD / arrows | Move / turn |
 | Mouse | Look (left/right and up/down) |
 | Left click | Fire |
-| 1 / 2 / 3 | Pistol / Shotgun (unlocks at wave 7) / Assault rifle (unlocks at wave 21) |
+| 1 / 2 / 3 / 4 | Fist (melee) / Pistol / Shotgun (unlocks at wave 7) / Assault rifle (unlocks at wave 21) |
+| Scroll wheel | Next / previous unlocked weapon |
 | R | Reload (restart after dying) |
 | T | Tyler Death Beam on/off (using it means the round's leaderboard entry won't count) |
 | Space | Jump |
+| Shift (hold) | Sprint |
+| Ctrl / double-tap a direction | Slide (Ctrl slides the way you're moving; steer with WASD). In mid-air it's a dive |
 | Right click / E (hold) | Grapple |
 | Middle click / G / Q | Throw David grenade |
 | Z / X / C | Answer Verity's quiz |

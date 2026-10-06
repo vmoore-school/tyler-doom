@@ -165,7 +165,7 @@ class Renderer:
         px, py, w = player.x, player.y, self.w
         ca, sa = math.cos(player.angle), math.sin(player.angle)
         proj, horizon, view_h, half = self.proj, self.horizon, self.view_h, self.w / 2
-        eye = (WALL_H - 0.5 - player.z) / WALL_H  # fraction of the wall above the eye (eye 0.5 + jump)
+        eye = (WALL_H - 0.5 - player.cam_z) / WALL_H  # fraction of the wall above the eye (eye 0.5 + jump/slide)
         full_h = TEX * WALL_H
         hk = proj * WALL_H  # wall height in pixels = hk / depth
         scale = pg.transform.scale
@@ -275,7 +275,7 @@ class Renderer:
                 continue
             left = self.w / 2 + math.tan(rel) * self.proj - size / 2
             z = getattr(s, "z", 0.0)  # height of the sprite's bottom above the floor
-            top = self.horizon + self.proj / depth * (0.5 + player.z - z) - size
+            top = self.horizon + self.proj / depth * (0.5 + player.cam_z - z) - size
             x0, x1 = max(0, math.ceil(left)), min(self.w, math.ceil(left + size))
             if x1 <= x0 or top >= self.view_h or top + size <= 0:
                 continue

@@ -11,6 +11,10 @@ class Player:
         self.x, self.y, self.angle = x, y, angle
         self.pitch = 0.0  # vertical look: horizon offset in screen pixels (+ = looking up)
         self.z = self.vz = 0.0  # jump height above the floor
+        self.crouch = 0.0       # camera dip while sliding (world units)
+        self.slide_t = self.slide_cd = 0.0
+        self.slide_dir = (0.0, 0.0)
+        self.dived = False      # used this jump's mid-air slide
         self.health = 100
         self.hurt_flash = 0.0
         self.invulnerable = False
@@ -19,6 +23,11 @@ class Player:
     @property
     def alive(self):
         return self.health > 0
+
+    @property
+    def cam_z(self):
+        """Camera height offset from standing (eye at 0.5 + this): up when jumping, down when sliding."""
+        return self.z - self.crouch
 
     def hurt(self, dmg, source=None):
         if self.invulnerable or not self.alive:
